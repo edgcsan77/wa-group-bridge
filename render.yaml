@@ -1,40 +1,32 @@
 services:
   - type: web
     name: wa-group-bridge
-    env: node
+    env: python
     plan: starter
-    buildCommand: npm install
-    startCommand: npm start
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
     autoDeploy: true
     healthCheckPath: /
     envVars:
-      - key: PORT
-        value: 10000
-      - key: EVOLUTION_WEBHOOK_SECRET
-        sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.11
       - key: EVOLUTION_BASE_URL
         sync: false
       - key: EVOLUTION_API_KEY
         sync: false
       - key: EVOLUTION_INSTANCE
         sync: false
+      - key: EVOLUTION_WEBHOOK_SECRET
+        sync: false
       - key: BOT_INTERNAL_URL
         sync: false
       - key: BOT_INTERNAL_TOKEN
         sync: false
-      - key: WHATSAPP_TOKEN
-        sync: false
-      - key: WHATSAPP_PHONE_NUMBER_ID
-        sync: false
-      - key: WHATSAPP_GRAPH_VERSION
-        value: v23.0
       - key: GROUP_COMMAND
         value: /csf
       - key: SEND_PDF_TO_GROUP
-        value: "true"
+        value: "1"
       - key: SEND_PDF_TO_REQUESTER
-        value: "true"
-      - key: SEND_PRIVATE_VIA
-        value: cloud
+        value: "1"
       - key: ALLOWED_GROUPS
         sync: false
