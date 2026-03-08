@@ -204,7 +204,7 @@ def call_bot_internal(requester_number: str, requester_name: str, group_jid: str
         "original_text": original_text,
         "query": query,
     }
-    r = requests.post(BOT_INTERNAL_URL, json=payload, headers=headers, timeout=300)
+    r = requests.post(BOT_INTERNAL_URL, json=payload, headers=headers, timeout=420)
     print("call_bot_internal status:", r.status_code, flush=True)
     print("call_bot_internal resp:", r.text, flush=True)
     r.raise_for_status()
