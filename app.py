@@ -222,15 +222,18 @@ def evolution_webhook():
         requester_number = _normalize_phone(
             participant.replace("@s.whatsapp.net", "").replace("@lid", "")
         )
-        requester_tag = f"@{requester_number}"
+        requester_name_clean = (push_name or "Usuario").strip()
+        requester_label = requester_name_clean
 
-        try:
-            evolution_send_text(
-                group_jid=remote_jid,
-                text=f"⌛ Procesando solicitud de {requester_tag}..."
-            )
-        except Exception as e:
-            print("group ack error:", repr(e), flush=True)
+        ack_key = f"ack:{msg_id}"
+        if not _seen(ack_key):
+            try:
+                evolution_send_text(
+                    group_jid=remote_jid,
+                    text=f"⌛ Procesando solicitud de {requester_label}..."
+                )
+            except Exception as e:
+                print("group ack error:", repr(e), flush=True)
 
         bot_resp = call_bot_internal(
             requester_number=requester_number,
@@ -245,7 +248,7 @@ def evolution_webhook():
             try:
                 evolution_send_text(
                     group_jid=remote_jid,
-                    text=f"❌ {requester_tag} {err}"
+                    text=f"❌ {requester_label} {err}"
                 )
             except Exception as e:
                 print("group error text send fail:", repr(e), flush=True)
@@ -260,7 +263,7 @@ def evolution_webhook():
             try:
                 evolution_send_text(
                     group_jid=remote_jid,
-                    text=f"❌ {requester_tag} no se obtuvo enlace del PDF."
+                    text=f"❌ {requester_label} no se obtuvo enlace del PDF."
                 )
             except Exception as e:
                 print("group no-pdf text send fail:", repr(e), flush=True)
@@ -272,7 +275,6 @@ def evolution_webhook():
                 group_jid=remote_jid,
                 media_url=pdf_url,
                 file_name=file_name,
-                caption=f"📄 Documento solicitado por {requester_tag}"
             )
 
         if SEND_PDF_TO_REQUESTER:
@@ -293,7 +295,7 @@ def evolution_webhook():
     except Exception as e:
         print("evolution_webhook error:", repr(e), flush=True)
         traceback.print_exc()
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": True, "handled": False, "error": str(e)}), 200
 
 
 @app.post("/test/send-group")
