@@ -285,7 +285,7 @@ def evolution_webhook():
             try:
                 evolution_send_text(
                     group_jid=remote_jid,
-                    text=f"⌛ Procesando solicitud de {requester_label}.Puede tardar 1-3 min..."
+                    text=f"⌛ Procesando solicitud de {requester_label}. Puede tardar 1-3 min..."
                 )
             except Exception as e:
                 print("group ack error:", repr(e), flush=True)
