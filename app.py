@@ -67,13 +67,19 @@ def _parse_command(text: str):
 def _extract_evolution_message(payload: dict):
     """
     Flexible para payloads comunes de Evolution.
+    Prioriza participantAlt porque en grupos modernos participant puede venir como @lid.
     """
     data = payload.get("data") or payload
     key = data.get("key") or {}
     message = data.get("message") or {}
 
     remote_jid = _safe(key.get("remoteJid") or data.get("remoteJid"))
-    participant = _safe(key.get("participant") or data.get("participant"))
+    participant = _safe(
+        key.get("participantAlt")
+        or data.get("participantAlt")
+        or key.get("participant")
+        or data.get("participant")
+    )
     msg_id = _safe(key.get("id") or data.get("id"))
     from_me = bool(key.get("fromMe") or data.get("fromMe"))
     push_name = _safe(data.get("pushName"))
@@ -106,19 +112,29 @@ def evolution_headers():
 
 
 def evolution_send_text(group_jid=None, number=None, text=""):
+    """
+    Workaround: para grupos usar number=<groupJid>
+    porque groupJid ha estado dando 400 en algunos endpoints/versiones.
+    """
     url = f"{EVOLUTION_BASE_URL}/message/sendText/{EVOLUTION_INSTANCE}"
     payload = {"text": text}
+
     if group_jid:
-        payload["groupJid"] = group_jid
-    if number:
+        payload["number"] = group_jid
+    elif number:
         payload["number"] = number
 
     r = requests.post(url, json=payload, headers=evolution_headers(), timeout=60)
+    print("sendText payload:", payload, flush=True)
+    print("sendText resp:", r.status_code, r.text, flush=True)
     r.raise_for_status()
     return r.json()
 
 
 def evolution_send_media(group_jid=None, number=None, media_url="", file_name="documento.pdf", caption=""):
+    """
+    Workaround: para grupos usar number=<groupJid>
+    """
     url = f"{EVOLUTION_BASE_URL}/message/sendMedia/{EVOLUTION_INSTANCE}"
     payload = {
         "mediatype": "document",
@@ -126,12 +142,15 @@ def evolution_send_media(group_jid=None, number=None, media_url="", file_name="d
         "fileName": file_name,
         "caption": caption,
     }
+
     if group_jid:
-        payload["groupJid"] = group_jid
-    if number:
+        payload["number"] = group_jid
+    elif number:
         payload["number"] = number
 
     r = requests.post(url, json=payload, headers=evolution_headers(), timeout=120)
+    print("sendMedia payload:", payload, flush=True)
+    print("sendMedia resp:", r.status_code, r.text, flush=True)
     r.raise_for_status()
     return r.json()
 
@@ -149,6 +168,8 @@ def call_bot_internal(requester_number: str, requester_name: str, group_jid: str
         "query": query,
     }
     r = requests.post(BOT_INTERNAL_URL, json=payload, headers=headers, timeout=300)
+    print("call_bot_internal status:", r.status_code, flush=True)
+    print("call_bot_internal resp:", r.text, flush=True)
     r.raise_for_status()
     return r.json()
 
@@ -198,7 +219,9 @@ def evolution_webhook():
         if not query:
             return jsonify({"ok": True, "ignored": "no_command"}), 200
 
-        requester_number = _normalize_phone(participant.replace("@s.whatsapp.net", ""))
+        requester_number = _normalize_phone(
+            participant.replace("@s.whatsapp.net", "").replace("@lid", "")
+        )
         requester_tag = f"@{requester_number}"
 
         try:
@@ -219,10 +242,14 @@ def evolution_webhook():
 
         if not bot_resp.get("ok"):
             err = bot_resp.get("error") or "No fue posible generar el documento."
-            evolution_send_text(
-                group_jid=remote_jid,
-                text=f"❌ {requester_tag} {err}"
-            )
+            try:
+                evolution_send_text(
+                    group_jid=remote_jid,
+                    text=f"❌ {requester_tag} {err}"
+                )
+            except Exception as e:
+                print("group error text send fail:", repr(e), flush=True)
+
             return jsonify({"ok": True, "delivered": False, "reason": "bot_failed"}), 200
 
         pdf_url = _safe(bot_resp.get("pdf_url"))
@@ -230,10 +257,14 @@ def evolution_webhook():
         caption = _safe(bot_resp.get("caption")) or "Aquí está tu documento."
 
         if not pdf_url:
-            evolution_send_text(
-                group_jid=remote_jid,
-                text=f"❌ {requester_tag} no se obtuvo enlace del PDF."
-            )
+            try:
+                evolution_send_text(
+                    group_jid=remote_jid,
+                    text=f"❌ {requester_tag} no se obtuvo enlace del PDF."
+                )
+            except Exception as e:
+                print("group no-pdf text send fail:", repr(e), flush=True)
+
             return jsonify({"ok": True, "delivered": False, "reason": "no_pdf_url"}), 200
 
         if SEND_PDF_TO_GROUP:
