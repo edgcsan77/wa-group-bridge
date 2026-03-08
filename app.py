@@ -227,6 +227,7 @@ def evolution_webhook():
 
         ack_key = f"ack:{msg_id}"
         if not _seen(ack_key):
+            _mark_seen(ack_key)
             try:
                 evolution_send_text(
                     group_jid=remote_jid,
