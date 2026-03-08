@@ -27,6 +27,9 @@ ALLOWED_GROUPS = {
 SEEN = {}
 SEEN_TTL = 600  # 10 min
 
+INFLIGHT = {}
+INFLIGHT_TTL = 300  # 5 min
+
 
 def _cleanup_seen():
     now = time.time()
@@ -42,6 +45,25 @@ def _seen(key: str) -> bool:
 
 def _mark_seen(key: str):
     SEEN[key] = time.time()
+
+
+def _cleanup_inflight():
+    now = time.time()
+    dead = [k for k, v in INFLIGHT.items() if now - v > INFLIGHT_TTL]
+    for k in dead:
+        INFLIGHT.pop(k, None)
+
+
+def _inflight_start(key: str) -> bool:
+    _cleanup_inflight()
+    if key in INFLIGHT:
+        return False
+    INFLIGHT[key] = time.time()
+    return True
+
+
+def _inflight_end(key: str):
+    INFLIGHT.pop(key, None)
 
 
 def _safe(v):
@@ -181,6 +203,8 @@ def health():
 
 @app.post("/evolution/webhook")
 def evolution_webhook():
+    job_key = None
+
     try:
         secret = request.headers.get("x-bridge-secret", "").strip()
         if EVOLUTION_WEBHOOK_SECRET and secret != EVOLUTION_WEBHOOK_SECRET:
@@ -222,16 +246,21 @@ def evolution_webhook():
         requester_number = _normalize_phone(
             participant.replace("@s.whatsapp.net", "").replace("@lid", "")
         )
-        requester_name_clean = (push_name or "Usuario").strip()
-        requester_label = requester_name_clean
+        requester_label = (push_name or "Usuario").strip()
 
+        # Evita volver a procesar la misma solicitud mientras sigue en curso
+        job_key = hashlib.sha1(f"{remote_jid}|{requester_number}|{query}".encode("utf-8")).hexdigest()
+        if not _inflight_start(job_key):
+            return jsonify({"ok": True, "ignored": "already_processing"}), 200
+
+        # Ack una sola vez por mensaje
         ack_key = f"ack:{msg_id}"
         if not _seen(ack_key):
             _mark_seen(ack_key)
             try:
                 evolution_send_text(
                     group_jid=remote_jid,
-                    text=f"⌛ Procesando solicitud de {requester_label}..."
+                    text=f"⌛ Procesando solicitud de {requester_label}. Esto puede tardar unos minutos..."
                 )
             except Exception as e:
                 print("group ack error:", repr(e), flush=True)
@@ -258,7 +287,6 @@ def evolution_webhook():
 
         pdf_url = _safe(bot_resp.get("pdf_url"))
         file_name = _safe(bot_resp.get("filename")) or "documento.pdf"
-        caption = _safe(bot_resp.get("caption")) or "Aquí está tu documento."
 
         if not pdf_url:
             try:
@@ -272,19 +300,35 @@ def evolution_webhook():
             return jsonify({"ok": True, "delivered": False, "reason": "no_pdf_url"}), 200
 
         if SEND_PDF_TO_GROUP:
-            evolution_send_media(
-                group_jid=remote_jid,
-                media_url=pdf_url,
-                file_name=file_name,
-            )
+            try:
+                evolution_send_media(
+                    group_jid=remote_jid,
+                    media_url=pdf_url,
+                    file_name=file_name,
+                )
+            except Exception as e:
+                print("group media send fail:", repr(e), flush=True)
+                try:
+                    evolution_send_text(
+                        group_jid=remote_jid,
+                        text=f"⚠️ {requester_label} el documento se generó, pero no pude enviarlo al grupo."
+                    )
+                except Exception as e2:
+                    print("group fallback text fail:", repr(e2), flush=True)
+
+                return jsonify({"ok": True, "delivered": False, "reason": "group_media_failed"}), 200
 
         if SEND_PDF_TO_REQUESTER:
-            evolution_send_media(
-                number=requester_number,
-                media_url=pdf_url,
-                file_name=file_name,
-                caption=caption
-            )
+            try:
+                caption = _safe(bot_resp.get("caption")) or "Aquí está tu documento."
+                evolution_send_media(
+                    number=requester_number,
+                    media_url=pdf_url,
+                    file_name=file_name,
+                    caption=caption
+                )
+            except Exception as e:
+                print("private media send fail:", repr(e), flush=True)
 
         return jsonify({
             "ok": True,
@@ -297,6 +341,13 @@ def evolution_webhook():
         print("evolution_webhook error:", repr(e), flush=True)
         traceback.print_exc()
         return jsonify({"ok": True, "handled": False, "error": str(e)}), 200
+
+    finally:
+        try:
+            if job_key:
+                _inflight_end(job_key)
+        except Exception:
+            pass
 
 
 @app.post("/test/send-group")
