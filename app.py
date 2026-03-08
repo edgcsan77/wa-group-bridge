@@ -30,6 +30,21 @@ SEEN_TTL = 600  # 10 min
 INFLIGHT = {}
 INFLIGHT_TTL = 300  # 5 min
 
+RECENT_COMMANDS = {}
+RECENT_COMMANDS_TTL = 180  # 3 min
+
+def _cleanup_recent_commands():
+    now = time.time()
+    dead = [k for k, v in RECENT_COMMANDS.items() if now - v > RECENT_COMMANDS_TTL]
+    for k in dead:
+        RECENT_COMMANDS.pop(k, None)
+
+def _recent_command_seen(key: str) -> bool:
+    _cleanup_recent_commands()
+    return key in RECENT_COMMANDS
+
+def _mark_recent_command(key: str):
+    RECENT_COMMANDS[key] = time.time()
 
 def _cleanup_seen():
     now = time.time()
@@ -248,8 +263,18 @@ def evolution_webhook():
         )
         requester_label = (push_name or "Usuario").strip()
 
+        normalized_query = re.sub(r"\s+", " ", (query or "").strip().upper())
+        command_key = hashlib.sha1(
+            f"{remote_jid}|{requester_number}|{normalized_query}".encode("utf-8")
+        ).hexdigest()
+        
+        if _recent_command_seen(command_key):
+            return jsonify({"ok": True, "ignored": "recent_same_command"}), 200
+        
+        _mark_recent_command(command_key)
+
         # Evita volver a procesar la misma solicitud mientras sigue en curso
-        job_key = hashlib.sha1(f"{remote_jid}|{requester_number}|{query}".encode("utf-8")).hexdigest()
+        job_key = command_key
         if not _inflight_start(job_key):
             return jsonify({"ok": True, "ignored": "already_processing"}), 200
 
@@ -260,7 +285,7 @@ def evolution_webhook():
             try:
                 evolution_send_text(
                     group_jid=remote_jid,
-                    text=f"⌛ Procesando solicitud de {requester_label}. Esto puede tardar 1-3 minutos..."
+                    text=f"⌛ Procesando solicitud de {requester_label}.Puede tardar 1-3 min..."
                 )
             except Exception as e:
                 print("group ack error:", repr(e), flush=True)
