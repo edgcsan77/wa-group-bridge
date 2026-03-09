@@ -4,7 +4,7 @@ services:
     env: python
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --threads 8 --timeout 60
     autoDeploy: true
     healthCheckPath: /
     envVars:
@@ -22,11 +22,9 @@ services:
         sync: false
       - key: BOT_INTERNAL_TOKEN
         sync: false
+      - key: REDIS_URL
+        sync: false
       - key: GROUP_COMMAND
         value: /csf
-      - key: SEND_PDF_TO_GROUP
-        value: "1"
-      - key: SEND_PDF_TO_REQUESTER
-        value: "1"
       - key: ALLOWED_GROUPS
         sync: false
