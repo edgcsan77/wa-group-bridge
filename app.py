@@ -27,26 +27,68 @@ BOT_INTERNAL_TOKEN = os.getenv("BOT_INTERNAL_TOKEN", "").strip()
 redis_conn = Redis.from_url(REDIS_URL)
 task_queue = Queue("constancia_jobs", connection=redis_conn)
 
-
 def _safe(v):
     return (v or "").strip() if isinstance(v, str) else (str(v).strip() if v is not None else "")
 
-
 def _normalize_phone(v: str) -> str:
     return re.sub(r"\D+", "", v or "")
-
 
 def _parse_command(text: str):
     t = _safe(text)
     if not t:
         return None
-    if not t.lower().startswith(GROUP_COMMAND.lower()):
-        return None
-    query = t[len(GROUP_COMMAND):].strip()
-    if not query:
-        return None
-    return query
 
+    raw = t.strip()
+
+    # Si viene con /csf, lo quitamos pero no lo obligamos
+    if GROUP_COMMAND:
+        cmd = GROUP_COMMAND.strip()
+        if raw.lower() == cmd.lower():
+            return None
+        if raw.lower().startswith((cmd + " ").lower()) or raw.lower().startswith((cmd + "\n").lower()):
+            raw = raw[len(cmd):].strip()
+
+    if not raw:
+        return None
+
+    upper_raw = raw.upper()
+    flat = re.sub(r"[ \t]+", " ", upper_raw).strip()
+
+    curp_pattern = r"[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d"
+    rfc_pattern = r"[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}"
+    idcif_pattern = r"\d{11}"
+
+    if re.fullmatch(curp_pattern, flat):
+        return flat
+        
+    if re.fullmatch(rfc_pattern, flat):
+        return flat
+
+    rfc_match = re.search(rf"\b({rfc_pattern})\b", upper_raw)
+    idcif_match = re.search(rf"\b({idcif_pattern})\b", upper_raw)
+
+    if rfc_match and idcif_match:
+        rfc = rfc_match.group(1)
+        idcif = idcif_match.group(1)
+        return f"RFC: {rfc}\nIDCIF: {idcif}"
+
+    lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
+    lines = [line for line in lines if line]
+
+    if len(lines) >= 2:
+        found_rfc = None
+        found_idcif = None
+
+        for line in lines:
+            if not found_rfc and re.fullmatch(rfc_pattern, line):
+                found_rfc = line
+            if not found_idcif and re.fullmatch(idcif_pattern, line):
+                found_idcif = line
+
+        if found_rfc and found_idcif:
+            return f"RFC: {found_rfc}\nIDCIF: {found_idcif}"
+
+    return None
 
 def _extract_evolution_message(payload: dict):
     data = payload.get("data") or payload
@@ -83,13 +125,11 @@ def _extract_evolution_message(payload: dict):
         "text": text,
     }
 
-
 def evolution_headers():
     return {
         "apikey": EVOLUTION_API_KEY,
         "Content-Type": "application/json",
     }
-
 
 def evolution_send_text(group_jid=None, number=None, text=""):
     url = f"{EVOLUTION_BASE_URL}/message/sendText/{EVOLUTION_INSTANCE}"
@@ -106,15 +146,12 @@ def evolution_send_text(group_jid=None, number=None, text=""):
     r.raise_for_status()
     return r.json()
 
-
 def _redis_setnx_ttl(key: str, ttl: int) -> bool:
     return bool(redis_conn.set(key, "1", ex=ttl, nx=True))
-
 
 @app.get("/")
 def health():
     return jsonify({"ok": True, "service": "wa-group-bridge"}), 200
-
 
 @app.post("/evolution/webhook")
 def evolution_webhook():
@@ -209,7 +246,6 @@ def evolution_webhook():
         print("evolution_webhook error:", repr(e), flush=True)
         traceback.print_exc()
         return jsonify({"ok": True, "handled": False, "error": str(e)}), 200
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
