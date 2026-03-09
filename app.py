@@ -3,6 +3,7 @@ import re
 import hashlib
 import traceback
 import requests
+import base64
 from flask import Flask, request, jsonify
 from redis import Redis
 from rq import Queue
@@ -107,13 +108,38 @@ def _extract_evolution_message(payload: dict):
     push_name = _safe(data.get("pushName"))
 
     text = ""
+    msg_type = "unknown"
+    media_id = ""
+    mime_type = ""
+    
     if isinstance(message.get("conversation"), str):
+        msg_type = "text"
         text = message.get("conversation", "").strip()
+
     elif isinstance(message.get("extendedTextMessage"), dict):
+        msg_type = "text"
         text = _safe(message["extendedTextMessage"].get("text"))
+
+    elif isinstance(message.get("imageMessage"), dict):
+        img = message["imageMessage"]
+        msg_type = "image"
+        media_id = _safe(img.get("id")) or _safe(data.get("id"))
+        mime_type = _safe(img.get("mimetype"))
+        text = _safe(img.get("caption"))
+
+    elif isinstance(message.get("documentMessage"), dict):
+        doc = message["documentMessage"]
+        msg_type = "document"
+        media_id = _safe(doc.get("id")) or _safe(data.get("id"))
+        mime_type = _safe(doc.get("mimetype"))
+        text = _safe(doc.get("caption") or doc.get("fileName"))
+
     elif isinstance(data.get("text"), str):
+        msg_type = "text"
         text = _safe(data.get("text"))
+
     elif isinstance(payload.get("text"), str):
+        msg_type = "text"
         text = _safe(payload.get("text"))
 
     return {
@@ -123,6 +149,9 @@ def _extract_evolution_message(payload: dict):
         "from_me": from_me,
         "push_name": push_name,
         "text": text,
+        "msg_type": msg_type,
+        "media_id": media_id,
+        "mime_type": mime_type,
     }
 
 def evolution_headers():
@@ -188,8 +217,18 @@ def evolution_webhook():
         if not _redis_setnx_ttl(dedupe_key, 600):
             return jsonify({"ok": True, "ignored": "duplicate"}), 200
 
+        msg_type = msg["msg_type"]
+        media_id = msg["media_id"]
+        mime_type = msg["mime_type"]
+        
         query = _parse_command(text)
-        if not query:
+        
+        is_media_candidate = (
+            msg_type in ("image", "document")
+            and bool(media_id)
+        )
+        
+        if not query and not is_media_candidate:
             return jsonify({"ok": True, "ignored": "no_command"}), 200
 
         requester_number = _normalize_phone(
@@ -197,7 +236,11 @@ def evolution_webhook():
         )
         requester_label = (push_name or "Usuario").strip()
 
-        normalized_query = re.sub(r"\s+", " ", query.strip().upper())
+        if query:
+            normalized_query = re.sub(r"\s+", " ", query.strip().upper())
+        else:
+            normalized_query = f"MEDIA:{msg_type}:{media_id}"
+        
         command_key = hashlib.sha1(
             f"{remote_jid}|{requester_number}|{normalized_query}".encode("utf-8")
         ).hexdigest()
@@ -223,6 +266,9 @@ def evolution_webhook():
             "group_jid": remote_jid,
             "original_text": text,
             "query": query,
+            "msg_type": msg_type,
+            "media_id": media_id,
+            "mime_type": mime_type,
             "bot_internal_url": BOT_INTERNAL_URL,
             "bot_internal_token": BOT_INTERNAL_TOKEN,
         }
