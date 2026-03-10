@@ -55,24 +55,54 @@ def _parse_command(text: str):
     upper_raw = raw.upper()
     flat = re.sub(r"[ \t]+", " ", upper_raw).strip()
 
+    # patrones
     curp_pattern = r"[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d"
     rfc_pattern = r"[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}"
     idcif_pattern = r"\d{11}"
 
+    # lugar de emisión: MUNICIPIO, ENTIDAD
+    lugar_pattern = r"[A-ZÁÉÍÓÚÜÑ\s]+,\s*[A-ZÁÉÍÓÚÜÑ\s]+"
+
+    # -------------------------------------------------
+    # 1) CURP exacto
+    # -------------------------------------------------
     if re.fullmatch(curp_pattern, flat):
         return flat
-        
+
+    # -------------------------------------------------
+    # 2) RFC exacto
+    # -------------------------------------------------
     if re.fullmatch(rfc_pattern, flat):
         return flat
 
+    # -------------------------------------------------
+    # 3) CURP + lugar (multilínea o corrido)
+    # -------------------------------------------------
+    if re.search(rf"\b{curp_pattern}\b", upper_raw) and re.search(lugar_pattern, upper_raw):
+        return upper_raw
+
+    # -------------------------------------------------
+    # 4) RFC ONLY + lugar (multilínea o corrido)
+    # -------------------------------------------------
+    if re.search(rf"\b{rfc_pattern}\b", upper_raw) and not re.search(rf"\b{idcif_pattern}\b", upper_raw) and re.search(lugar_pattern, upper_raw):
+        return upper_raw
+
+    # -------------------------------------------------
+    # 5) RFC + IDCIF (si además trae lugar, conservar TODO)
+    # -------------------------------------------------
     rfc_match = re.search(rf"\b({rfc_pattern})\b", upper_raw)
     idcif_match = re.search(rf"\b({idcif_pattern})\b", upper_raw)
 
     if rfc_match and idcif_match:
+        if re.search(lugar_pattern, upper_raw):
+            return upper_raw
         rfc = rfc_match.group(1)
         idcif = idcif_match.group(1)
         return f"RFC: {rfc}\nIDCIF: {idcif}"
 
+    # -------------------------------------------------
+    # 6) RFC + IDCIF separados en líneas
+    # -------------------------------------------------
     lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
     lines = [line for line in lines if line]
 
@@ -87,6 +117,8 @@ def _parse_command(text: str):
                 found_idcif = line
 
         if found_rfc and found_idcif:
+            if any("," in line for line in lines):
+                return "\n".join(lines)
             return f"RFC: {found_rfc}\nIDCIF: {found_idcif}"
 
     return None
