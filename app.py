@@ -4,9 +4,13 @@ import hashlib
 import traceback
 import requests
 import base64
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from redis import Redis
 from rq import Queue
+
+import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
 
@@ -123,6 +127,78 @@ def _parse_command(text: str):
 
     return None
 
+PANEL_TZ = os.getenv("PANEL_TZ", "America/Monterrey").strip()
+
+def _panel_now():
+    return datetime.now(ZoneInfo(PANEL_TZ))
+
+def _panel_day_str():
+    return _panel_now().strftime("%Y-%m-%d")
+
+def _safe_int(v, default=0):
+    try:
+        return int(v or 0)
+    except Exception:
+        return default
+
+def _extract_group_name(payload: dict) -> str:
+    data = payload.get("data") or payload or {}
+    msg = data.get("message") or {}
+
+    candidates = [
+        data.get("groupName"),
+        data.get("subject"),
+        data.get("groupSubject"),
+        payload.get("groupName"),
+        payload.get("subject"),
+        msg.get("groupName") if isinstance(msg, dict) else None,
+    ]
+
+    for c in candidates:
+        s = _safe(c)
+        if s:
+            return s
+
+    return ""
+
+def _panel_load_today_rows():
+    day = _panel_day_str()
+    prefix = f"panel_stats:{day}:group:"
+    rows = []
+
+    for key in redis_conn.scan_iter(match=prefix + "*"):
+        raw = redis_conn.hgetall(key) or {}
+        row = {
+            "group_jid": raw.get("group_jid") or key.split(":group:", 1)[-1],
+            "group_name": raw.get("group_name") or raw.get("group_jid") or key.split(":group:", 1)[-1],
+            "total": _safe_int(raw.get("total")),
+            "ok_rfc_idcif_qr": _safe_int(raw.get("ok_rfc_idcif_qr")),
+            "ok_rfc_clon": _safe_int(raw.get("ok_rfc_clon")),
+            "ok_rfc_idcif": _safe_int(raw.get("ok_rfc_idcif")),
+            "ok_qr": _safe_int(raw.get("ok_qr")),
+            "ok_curp": _safe_int(raw.get("ok_curp")),
+            "ok_rfc_only": _safe_int(raw.get("ok_rfc_only")),
+            "updated_at": raw.get("updated_at") or "",
+            "day": raw.get("day") or day,
+        }
+        rows.append(row)
+
+    rows.sort(key=lambda x: (-x["total"], x["group_name"], x["group_jid"]))
+    return rows
+
+def _panel_summary(rows):
+    return {
+        "day": _panel_day_str(),
+        "groups": len(rows),
+        "total": sum(r["total"] for r in rows),
+        "ok_rfc_idcif_qr": sum(r["ok_rfc_idcif_qr"] for r in rows),
+        "ok_rfc_clon": sum(r["ok_rfc_clon"] for r in rows),
+        "ok_rfc_idcif": sum(r["ok_rfc_idcif"] for r in rows),
+        "ok_qr": sum(r["ok_qr"] for r in rows),
+        "ok_curp": sum(r["ok_curp"] for r in rows),
+        "ok_rfc_only": sum(r["ok_rfc_only"] for r in rows),
+    }
+
 def _extract_evolution_message(payload: dict):
     data = payload.get("data") or payload
     key = data.get("key") or {}
@@ -138,6 +214,7 @@ def _extract_evolution_message(payload: dict):
     msg_id = _safe(key.get("id") or data.get("id"))
     from_me = bool(key.get("fromMe") or data.get("fromMe"))
     push_name = _safe(data.get("pushName"))
+    group_name = _extract_group_name(payload)
 
     text = ""
     msg_type = "unknown"
@@ -180,6 +257,7 @@ def _extract_evolution_message(payload: dict):
         "msg_id": msg_id,
         "from_me": from_me,
         "push_name": push_name,
+        "group_name": group_name,
         "text": text,
         "msg_type": msg_type,
         "media_id": media_id,
@@ -232,6 +310,7 @@ def evolution_webhook():
         from_me = msg["from_me"]
         text = msg["text"]
         push_name = msg["push_name"] or "Usuario"
+        group_name = msg.get("group_name") or remote_jid
 
         if not remote_jid.endswith("@g.us"):
             return jsonify({"ok": True, "ignored": "not_group"}), 200
@@ -296,6 +375,7 @@ def evolution_webhook():
             "requester_name": push_name,
             "requester_label": requester_label,
             "group_jid": remote_jid,
+            "group_name": group_name,
             "original_text": text,
             "query": query,
             "msg_type": msg_type,
@@ -324,6 +404,171 @@ def evolution_webhook():
         print("evolution_webhook error:", repr(e), flush=True)
         traceback.print_exc()
         return jsonify({"ok": True, "handled": False, "error": str(e)}), 200
+
+@app.get("/panel/api/stats")
+def panel_api_stats():
+    rows = _panel_load_today_rows()
+    summary = _panel_summary(rows)
+    return jsonify({
+        "ok": True,
+        "summary": summary,
+        "rows": rows,
+    }), 200
+
+@app.get("/panel")
+def panel_stats():
+    rows = _panel_load_today_rows()
+    summary = _panel_summary(rows)
+
+    html = f"""
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Panel puente WA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {{
+      font-family: Arial, sans-serif;
+      background: #f6f7fb;
+      margin: 0;
+      padding: 24px;
+      color: #1f2937;
+    }}
+    .wrap {{
+      max-width: 1200px;
+      margin: 0 auto;
+    }}
+    h1 {{
+      margin: 0 0 8px;
+      font-size: 28px;
+    }}
+    .sub {{
+      color: #6b7280;
+      margin-bottom: 18px;
+    }}
+    .cards {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }}
+    .card {{
+      background: #fff;
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 2px 10px rgba(0,0,0,.06);
+    }}
+    .card .label {{
+      font-size: 13px;
+      color: #6b7280;
+      margin-bottom: 6px;
+    }}
+    .card .value {{
+      font-size: 28px;
+      font-weight: 700;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(0,0,0,.06);
+    }}
+    th, td {{
+      padding: 12px 10px;
+      border-bottom: 1px solid #eceff4;
+      text-align: left;
+      font-size: 14px;
+      vertical-align: top;
+    }}
+    th {{
+      background: #111827;
+      color: #fff;
+      position: sticky;
+      top: 0;
+    }}
+    tr:hover td {{
+      background: #f9fafb;
+    }}
+    .muted {{
+      color: #6b7280;
+      font-size: 12px;
+    }}
+    .right {{
+      text-align: right;
+    }}
+  </style>
+  <script>
+    setTimeout(() => location.reload(), 30000);
+  </script>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Panel puente WA</h1>
+    <div class="sub">Corte diario automático: {summary["day"]} (reinicio lógico a las 00:00:00, {PANEL_TZ})</div>
+
+    <div class="cards">
+      <div class="card"><div class="label">Total exitosos hoy</div><div class="value">{summary["total"]}</div></div>
+      <div class="card"><div class="label">RFC_IDCIF + QR</div><div class="value">{summary["ok_rfc_idcif_qr"]}</div></div>
+      <div class="card"><div class="label">RFC clon</div><div class="value">{summary["ok_rfc_clon"]}</div></div>
+      <div class="card"><div class="label">RFC_IDCIF texto</div><div class="value">{summary["ok_rfc_idcif"]}</div></div>
+      <div class="card"><div class="label">QR</div><div class="value">{summary["ok_qr"]}</div></div>
+      <div class="card"><div class="label">CURP</div><div class="value">{summary["ok_curp"]}</div></div>
+      <div class="card"><div class="label">RFC_ONLY</div><div class="value">{summary["ok_rfc_only"]}</div></div>
+      <div class="card"><div class="label">Grupos con actividad</div><div class="value">{summary["groups"]}</div></div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Grupo</th>
+          <th>ID grupo</th>
+          <th class="right">Total</th>
+          <th class="right">RFC_IDCIF + QR</th>
+          <th class="right">RFC clon</th>
+          <th class="right">RFC_IDCIF</th>
+          <th class="right">QR</th>
+          <th class="right">CURP</th>
+          <th class="right">RFC_ONLY</th>
+          <th>Actualizado</th>
+        </tr>
+      </thead>
+      <tbody>
+    """
+
+    if rows:
+        for r in rows:
+            html += f"""
+        <tr>
+          <td>{r["group_name"]}</td>
+          <td><div>{r["group_jid"]}</div></td>
+          <td class="right">{r["total"]}</td>
+          <td class="right">{r["ok_rfc_idcif_qr"]}</td>
+          <td class="right">{r["ok_rfc_clon"]}</td>
+          <td class="right">{r["ok_rfc_idcif"]}</td>
+          <td class="right">{r["ok_qr"]}</td>
+          <td class="right">{r["ok_curp"]}</td>
+          <td class="right">{r["ok_rfc_only"]}</td>
+          <td><span class="muted">{r["updated_at"]}</span></td>
+        </tr>
+            """
+    else:
+        html += """
+        <tr>
+          <td colspan="10">Sin actividad hoy.</td>
+        </tr>
+        """
+
+    html += """
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
+    """
+    return Response(html, mimetype="text/html")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
