@@ -520,8 +520,6 @@ def panel_stats():
 
     <div class="cards">
       <div class="card"><div class="label">Total exitosos hoy</div><div class="value">{summary["total"]}</div></div>
-      <div class="card"><div class="label">RFC_IDCIF + QR</div><div class="value">{summary["ok_rfc_idcif_qr"]}</div></div>
-      <div class="card"><div class="label">RFC clon</div><div class="value">{summary["ok_rfc_clon"]}</div></div>
       <div class="card"><div class="label">RFC_IDCIF texto</div><div class="value">{summary["ok_rfc_idcif"]}</div></div>
       <div class="card"><div class="label">QR</div><div class="value">{summary["ok_qr"]}</div></div>
       <div class="card"><div class="label">CURP</div><div class="value">{summary["ok_curp"]}</div></div>
@@ -535,8 +533,6 @@ def panel_stats():
           <th>Grupo</th>
           <th>ID grupo</th>
           <th class="right">Total</th>
-          <th class="right">RFC_IDCIF + QR</th>
-          <th class="right">RFC clon</th>
           <th class="right">RFC_IDCIF</th>
           <th class="right">QR</th>
           <th class="right">CURP</th>
