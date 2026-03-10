@@ -161,16 +161,25 @@ def _extract_group_name(payload: dict) -> str:
 
     return ""
 
+def _to_str(v):
+    if isinstance(v, bytes):
+        return v.decode("utf-8", errors="ignore")
+    return v or ""
+
 def _panel_load_today_rows():
     day = _panel_day_str()
     prefix = f"panel_stats:{day}:group:"
     rows = []
 
     for key in redis_conn.scan_iter(match=prefix + "*"):
+        key_s = _to_str(key)
+
         raw = redis_conn.hgetall(key) or {}
+        raw = {_to_str(k): _to_str(v) for k, v in raw.items()}
+
         row = {
-            "group_jid": raw.get("group_jid") or key.split(":group:", 1)[-1],
-            "group_name": raw.get("group_name") or raw.get("group_jid") or key.split(":group:", 1)[-1],
+            "group_jid": raw.get("group_jid") or key_s.split(":group:", 1)[-1],
+            "group_name": raw.get("group_name") or raw.get("group_jid") or key_s.split(":group:", 1)[-1],
             "total": _safe_int(raw.get("total")),
             "ok_rfc_idcif_qr": _safe_int(raw.get("ok_rfc_idcif_qr")),
             "ok_rfc_clon": _safe_int(raw.get("ok_rfc_clon")),
