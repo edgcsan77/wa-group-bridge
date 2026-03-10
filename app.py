@@ -429,6 +429,11 @@ def panel_stats():
     rows = _panel_load_today_rows()
     summary = _panel_summary(rows)
 
+    def esc(v):
+        if v is None:
+            return ""
+        return str(v)
+
     html = f"""
 <!doctype html>
 <html lang="es">
@@ -437,76 +442,357 @@ def panel_stats():
   <title>Panel puente WA</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body {{
-      font-family: Arial, sans-serif;
-      background: #f6f7fb;
-      margin: 0;
-      padding: 24px;
-      color: #1f2937;
+    :root {{
+      --bg: #f3f6fb;
+      --panel: #ffffff;
+      --panel-2: #f8fafc;
+      --text: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --primary: #2563eb;
+      --primary-2: #1d4ed8;
+      --success: #16a34a;
+      --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      --radius: 18px;
+      --radius-sm: 14px;
     }}
+
+    * {{
+      box-sizing: border-box;
+    }}
+
+    html, body {{
+      margin: 0;
+      padding: 0;
+      font-family: Inter, Arial, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(37,99,235,.08), transparent 30%),
+        linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
+      color: var(--text);
+    }}
+
+    body {{
+      padding: 16px;
+    }}
+
     .wrap {{
-      max-width: 1200px;
+      width: 100%;
+      max-width: 1400px;
       margin: 0 auto;
     }}
-    h1 {{
-      margin: 0 0 8px;
-      font-size: 28px;
-    }}
-    .sub {{
-      color: #6b7280;
+
+    .hero {{
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #2563eb 100%);
+      color: white;
+      border-radius: 24px;
+      padding: clamp(18px, 3vw, 32px);
+      box-shadow: var(--shadow);
       margin-bottom: 18px;
+      position: relative;
+      overflow: hidden;
     }}
+
+    .hero::after {{
+      content: "";
+      position: absolute;
+      right: -60px;
+      top: -60px;
+      width: 220px;
+      height: 220px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.08);
+      filter: blur(4px);
+    }}
+
+    .hero h1 {{
+      margin: 0 0 8px;
+      font-size: clamp(1.5rem, 2.5vw, 2.2rem);
+      line-height: 1.1;
+      letter-spacing: -.02em;
+      position: relative;
+      z-index: 1;
+    }}
+
+    .hero .sub {{
+      margin: 0;
+      color: rgba(255,255,255,.82);
+      font-size: clamp(.92rem, 1.4vw, 1rem);
+      line-height: 1.5;
+      position: relative;
+      z-index: 1;
+      max-width: 900px;
+    }}
+
     .cards {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 12px;
-      margin-bottom: 20px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 18px;
     }}
+
     .card {{
-      background: #fff;
-      border-radius: 14px;
-      padding: 16px;
-      box-shadow: 0 2px 10px rgba(0,0,0,.06);
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(226,232,240,.9);
+      border-radius: var(--radius);
+      padding: 18px;
+      box-shadow: var(--shadow);
+      min-height: 108px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
     }}
+
     .card .label {{
-      font-size: 13px;
-      color: #6b7280;
-      margin-bottom: 6px;
+      font-size: .85rem;
+      color: var(--muted);
+      margin-bottom: 10px;
+      font-weight: 600;
+      letter-spacing: .01em;
     }}
+
     .card .value {{
-      font-size: 28px;
-      font-weight: 700;
+      font-size: clamp(1.4rem, 3vw, 2rem);
+      font-weight: 800;
+      line-height: 1;
+      color: var(--text);
     }}
+
+    .section {{
+      background: rgba(255,255,255,.88);
+      border: 1px solid rgba(226,232,240,.9);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }}
+
+    .section-head {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    }}
+
+    .section-title {{
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 800;
+      color: var(--text);
+    }}
+
+    .section-note {{
+      color: var(--muted);
+      font-size: .9rem;
+      white-space: nowrap;
+    }}
+
+    .table-wrap {{
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }}
+
     table {{
       width: 100%;
-      border-collapse: collapse;
-      background: #fff;
-      border-radius: 14px;
-      overflow: hidden;
-      box-shadow: 0 2px 10px rgba(0,0,0,.06);
+      min-width: 1050px;
+      border-collapse: separate;
+      border-spacing: 0;
+      background: white;
     }}
-    th, td {{
-      padding: 12px 10px;
-      border-bottom: 1px solid #eceff4;
-      text-align: left;
-      font-size: 14px;
-      vertical-align: top;
-    }}
-    th {{
-      background: #111827;
+
+    thead th {{
+      background: #0f172a;
       color: #fff;
+      font-size: .82rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+      padding: 14px 12px;
+      text-align: left;
       position: sticky;
       top: 0;
+      z-index: 2;
+      border-bottom: 1px solid #0b1220;
     }}
-    tr:hover td {{
-      background: #f9fafb;
+
+    tbody td {{
+      padding: 14px 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: .95rem;
+      vertical-align: top;
+      background: white;
     }}
-    .muted {{
-      color: #6b7280;
-      font-size: 12px;
+
+    tbody tr:hover td {{
+      background: #f8fbff;
     }}
+
+    tbody tr:last-child td {{
+      border-bottom: none;
+    }}
+
     .right {{
       text-align: right;
+      font-variant-numeric: tabular-nums;
+    }}
+
+    .group-name {{
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 4px;
+      word-break: break-word;
+    }}
+
+    .group-id {{
+      color: var(--muted);
+      font-size: .82rem;
+      word-break: break-all;
+      line-height: 1.35;
+    }}
+
+    .muted {{
+      color: var(--muted);
+      font-size: .84rem;
+      line-height: 1.35;
+    }}
+
+    .badge {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 36px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-weight: 700;
+      font-size: .86rem;
+    }}
+
+    .total-badge {{
+      background: #ecfdf5;
+      color: #15803d;
+    }}
+
+    .empty {{
+      padding: 28px 18px;
+      text-align: center;
+      color: var(--muted);
+      font-size: .95rem;
+      background: white;
+    }}
+
+    @media (max-width: 1200px) {{
+      .cards {{
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }}
+    }}
+
+    @media (max-width: 720px) {{
+      body {{
+        padding: 12px;
+      }}
+
+      .hero {{
+        border-radius: 20px;
+      }}
+
+      .cards {{
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }}
+
+      .card {{
+        min-height: 96px;
+        padding: 16px;
+      }}
+
+      .section {{
+        border-radius: 18px;
+      }}
+
+      .section-head {{
+        flex-direction: column;
+        align-items: flex-start;
+      }}
+
+      .table-wrap {{
+        overflow: visible;
+      }}
+
+      table,
+      thead,
+      tbody,
+      th,
+      td,
+      tr {{
+        display: block;
+        width: 100%;
+      }}
+
+      table {{
+        min-width: 0;
+        background: transparent;
+      }}
+
+      thead {{
+        display: none;
+      }}
+
+      tbody {{
+        display: grid;
+        gap: 12px;
+        padding: 12px;
+        background: #f8fafc;
+      }}
+
+      tbody tr {{
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+      }}
+
+      tbody td {{
+        border-bottom: 1px solid #eef2f7;
+        padding: 12px 14px;
+        text-align: left !important;
+        position: relative;
+      }}
+
+      tbody td:last-child {{
+        border-bottom: none;
+      }}
+
+      tbody td::before {{
+        content: attr(data-label);
+        display: block;
+        font-size: .76rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .03em;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }}
+
+      .group-name {{
+        font-size: 1rem;
+      }}
+
+      .badge,
+      .total-badge {{
+        min-width: auto;
+      }}
+    }}
+
+    @media (max-width: 420px) {{
+      .cards {{
+        grid-template-columns: 1fr;
+      }}
     }}
   </style>
   <script>
@@ -515,60 +801,94 @@ def panel_stats():
 </head>
 <body>
   <div class="wrap">
-    <h1>Panel puente WA</h1>
-    <div class="sub">Corte diario automático: {summary["day"]} (reinicio lógico a las 00:00:00, {PANEL_TZ})</div>
+    <section class="hero">
+      <h1>Panel puente WA</h1>
+      <p class="sub">
+        Corte diario automático: {summary["day"]} (reinicio lógico a las 00:00:00, {PANEL_TZ})
+      </p>
+    </section>
 
-    <div class="cards">
-      <div class="card"><div class="label">Total exitosos hoy</div><div class="value">{summary["total"]}</div></div>
-      <div class="card"><div class="label">RFC_IDCIF texto</div><div class="value">{summary["ok_rfc_idcif"]}</div></div>
-      <div class="card"><div class="label">QR</div><div class="value">{summary["ok_qr"]}</div></div>
-      <div class="card"><div class="label">CURP</div><div class="value">{summary["ok_curp"]}</div></div>
-      <div class="card"><div class="label">RFC_ONLY</div><div class="value">{summary["ok_rfc_only"]}</div></div>
-      <div class="card"><div class="label">Grupos con actividad</div><div class="value">{summary["groups"]}</div></div>
-    </div>
+    <section class="cards">
+      <div class="card">
+        <div class="label">Total exitosos hoy</div>
+        <div class="value">{summary["total"]}</div>
+      </div>
+      <div class="card">
+        <div class="label">RFC_IDCIF texto</div>
+        <div class="value">{summary["ok_rfc_idcif"]}</div>
+      </div>
+      <div class="card">
+        <div class="label">QR</div>
+        <div class="value">{summary["ok_qr"]}</div>
+      </div>
+      <div class="card">
+        <div class="label">CURP</div>
+        <div class="value">{summary["ok_curp"]}</div>
+      </div>
+      <div class="card">
+        <div class="label">RFC_ONLY</div>
+        <div class="value">{summary["ok_rfc_only"]}</div>
+      </div>
+      <div class="card">
+        <div class="label">Grupos con actividad</div>
+        <div class="value">{summary["groups"]}</div>
+      </div>
+    </section>
 
-    <table>
-      <thead>
-        <tr>
-          <th>Grupo</th>
-          <th>ID grupo</th>
-          <th class="right">Total</th>
-          <th class="right">RFC_IDCIF</th>
-          <th class="right">QR</th>
-          <th class="right">CURP</th>
-          <th class="right">RFC_ONLY</th>
-          <th>Actualizado</th>
-        </tr>
-      </thead>
-      <tbody>
+    <section class="section">
+      <div class="section-head">
+        <h2 class="section-title">Actividad por grupo</h2>
+        <div class="section-note">Actualización automática cada 30 segundos</div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Grupo</th>
+              <th class="right">Total</th>
+              <th class="right">RFC_IDCIF_QR</th>
+              <th class="right">RFC_CLON</th>
+              <th class="right">RFC_IDCIF</th>
+              <th class="right">QR</th>
+              <th class="right">CURP</th>
+              <th class="right">RFC_ONLY</th>
+              <th>Actualizado</th>
+            </tr>
+          </thead>
+          <tbody>
     """
 
     if rows:
         for r in rows:
             html += f"""
-        <tr>
-          <td>{r["group_name"]}</td>
-          <td><div>{r["group_jid"]}</div></td>
-          <td class="right">{r["total"]}</td>
-          <td class="right">{r["ok_rfc_idcif_qr"]}</td>
-          <td class="right">{r["ok_rfc_clon"]}</td>
-          <td class="right">{r["ok_rfc_idcif"]}</td>
-          <td class="right">{r["ok_qr"]}</td>
-          <td class="right">{r["ok_curp"]}</td>
-          <td class="right">{r["ok_rfc_only"]}</td>
-          <td><span class="muted">{r["updated_at"]}</span></td>
-        </tr>
+            <tr>
+              <td data-label="Grupo">
+                <div class="group-name">{esc(r["group_name"])}</div>
+                <div class="group-id">{esc(r["group_jid"])}</div>
+              </td>
+              <td data-label="Total" class="right"><span class="badge total-badge">{esc(r["total"])}</span></td>
+              <td data-label="RFC_IDCIF_QR" class="right"><span class="badge">{esc(r["ok_rfc_idcif_qr"])}</span></td>
+              <td data-label="RFC_CLON" class="right"><span class="badge">{esc(r["ok_rfc_clon"])}</span></td>
+              <td data-label="RFC_IDCIF" class="right"><span class="badge">{esc(r["ok_rfc_idcif"])}</span></td>
+              <td data-label="QR" class="right"><span class="badge">{esc(r["ok_qr"])}</span></td>
+              <td data-label="CURP" class="right"><span class="badge">{esc(r["ok_curp"])}</span></td>
+              <td data-label="RFC_ONLY" class="right"><span class="badge">{esc(r["ok_rfc_only"])}</span></td>
+              <td data-label="Actualizado"><span class="muted">{esc(r["updated_at"])}</span></td>
+            </tr>
             """
     else:
         html += """
-        <tr>
-          <td colspan="10">Sin actividad hoy.</td>
-        </tr>
+            <tr>
+              <td colspan="9" class="empty">Sin actividad hoy.</td>
+            </tr>
         """
 
     html += """
-      </tbody>
-    </table>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </div>
 </body>
 </html>
