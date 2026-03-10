@@ -145,19 +145,20 @@ def _extract_group_name(payload: dict) -> str:
     data = payload.get("data") or payload or {}
     msg = data.get("message") or {}
 
-    candidates = [
-        data.get("groupName"),
-        data.get("subject"),
-        data.get("groupSubject"),
-        payload.get("groupName"),
-        payload.get("subject"),
-        msg.get("groupName") if isinstance(msg, dict) else None,
-    ]
+    candidates = {
+        "data.groupName": _safe(data.get("groupName")),
+        "data.subject": _safe(data.get("subject")),
+        "data.groupSubject": _safe(data.get("groupSubject")),
+        "payload.groupName": _safe(payload.get("groupName")),
+        "payload.subject": _safe(payload.get("subject")),
+        "msg.groupName": _safe(msg.get("groupName")) if isinstance(msg, dict) else "",
+    }
 
-    for c in candidates:
-        s = _safe(c)
-        if s:
-            return s
+    print("[GROUP NAME CANDIDATES]", candidates, flush=True)
+
+    for _, val in candidates.items():
+        if val:
+            return val
 
     return ""
 
@@ -313,6 +314,8 @@ def evolution_webhook():
 
         msg = _extract_evolution_message(payload)
 
+        print("[GROUP NAME RAW FROM MSG]", repr(msg.get("group_name")), flush=True)
+
         remote_jid = msg["remote_jid"]
         participant = msg["participant"]
         msg_id = msg["msg_id"]
@@ -320,6 +323,9 @@ def evolution_webhook():
         text = msg["text"]
         push_name = msg["push_name"] or "Usuario"
         group_name = msg.get("group_name") or remote_jid
+
+        print("[GROUP NAME FINAL BEFORE JOB]", repr(group_name), flush=True)
+        print("[REMOTE JID]", repr(remote_jid), flush=True)
 
         if not remote_jid.endswith("@g.us"):
             return jsonify({"ok": True, "ignored": "not_group"}), 200
@@ -850,7 +856,7 @@ def panel_stats():
               <th class="right">RFC_IDCIF</th>
               <th class="right">QR</th>
               <th class="right">CURP</th>
-              <th class="right">RFC_ONLY</th>
+              <th class="right">RFC_solo</th>
               <th>Actualizado</th>
             </tr>
           </thead>
