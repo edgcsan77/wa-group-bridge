@@ -814,7 +814,7 @@ def panel_stats():
         <div class="value">{summary["total"]}</div>
       </div>
       <div class="card">
-        <div class="label">RFC_IDCIF texto</div>
+        <div class="label">RFC IDCIF</div>
         <div class="value">{summary["ok_rfc_idcif"]}</div>
       </div>
       <div class="card">
@@ -826,7 +826,7 @@ def panel_stats():
         <div class="value">{summary["ok_curp"]}</div>
       </div>
       <div class="card">
-        <div class="label">RFC_ONLY</div>
+        <div class="label">RFC solo</div>
         <div class="value">{summary["ok_rfc_only"]}</div>
       </div>
       <div class="card">
@@ -847,8 +847,6 @@ def panel_stats():
             <tr>
               <th>Grupo</th>
               <th class="right">Total</th>
-              <th class="right">RFC_IDCIF_QR</th>
-              <th class="right">RFC_CLON</th>
               <th class="right">RFC_IDCIF</th>
               <th class="right">QR</th>
               <th class="right">CURP</th>
@@ -868,12 +866,10 @@ def panel_stats():
                 <div class="group-id">{esc(r["group_jid"])}</div>
               </td>
               <td data-label="Total" class="right"><span class="badge total-badge">{esc(r["total"])}</span></td>
-              <td data-label="RFC_IDCIF_QR" class="right"><span class="badge">{esc(r["ok_rfc_idcif_qr"])}</span></td>
-              <td data-label="RFC_CLON" class="right"><span class="badge">{esc(r["ok_rfc_clon"])}</span></td>
               <td data-label="RFC_IDCIF" class="right"><span class="badge">{esc(r["ok_rfc_idcif"])}</span></td>
               <td data-label="QR" class="right"><span class="badge">{esc(r["ok_qr"])}</span></td>
               <td data-label="CURP" class="right"><span class="badge">{esc(r["ok_curp"])}</span></td>
-              <td data-label="RFC_ONLY" class="right"><span class="badge">{esc(r["ok_rfc_only"])}</span></td>
+              <td data-label="RFC_solo" class="right"><span class="badge">{esc(r["ok_rfc_only"])}</span></td>
               <td data-label="Actualizado"><span class="muted">{esc(r["updated_at"])}</span></td>
             </tr>
             """
