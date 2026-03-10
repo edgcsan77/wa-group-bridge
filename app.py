@@ -123,14 +123,14 @@ def _extract_evolution_message(payload: dict):
     elif isinstance(message.get("imageMessage"), dict):
         img = message["imageMessage"]
         msg_type = "image"
-        media_id = _safe(img.get("id")) or _safe(data.get("id"))
+        media_id = msg_id
         mime_type = _safe(img.get("mimetype"))
         text = _safe(img.get("caption"))
 
     elif isinstance(message.get("documentMessage"), dict):
         doc = message["documentMessage"]
         msg_type = "document"
-        media_id = _safe(doc.get("id")) or _safe(data.get("id"))
+        media_id = msg_id
         mime_type = _safe(doc.get("mimetype"))
         text = _safe(doc.get("caption") or doc.get("fileName"))
 
