@@ -31,8 +31,8 @@ GROUP_NAME_MAP = {
     "120363408404644680@g.us": "GRUPO 3",
     "120363424434192043@g.us": "GRUPO 4",
     "120363407782555379@g.us": "GRUPO 5",
-    "120363407782555379@g.us": "GRUPO 6",
-    "1120363427426623452@g.us": "GRUPO 7",
+    "120363424298172274@g.us": "GRUPO 6",
+    "120363427426623452@g.us": "GRUPO 7",
 }
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -188,9 +188,12 @@ def _panel_load_today_rows():
         raw = redis_conn.hgetall(key) or {}
         raw = {_to_str(k): _to_str(v) for k, v in raw.items()}
 
+        group_jid = raw.get("group_jid") or key_s.split(":group:", 1)[-1]
+        group_name = GROUP_NAME_MAP.get(group_jid) or raw.get("group_name") or group_jid
+
         row = {
-            "group_jid": raw.get("group_jid") or key_s.split(":group:", 1)[-1],
-            "group_name": raw.get("group_name") or raw.get("group_jid") or key_s.split(":group:", 1)[-1],
+            "group_jid": group_jid,
+            "group_name": group_name,
             "total": _safe_int(raw.get("total")),
             "ok_rfc_idcif_qr": _safe_int(raw.get("ok_rfc_idcif_qr")),
             "ok_rfc_clon": _safe_int(raw.get("ok_rfc_clon")),
