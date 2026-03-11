@@ -25,6 +25,16 @@ ALLOWED_GROUPS = {
     x.strip() for x in (os.getenv("ALLOWED_GROUPS", "") or "").split(",") if x.strip()
 }
 
+GROUP_NAME_MAP = {
+    "120363424256034923@g.us": "GRUPO 1",
+    "120363424415085327@g.us": "GRUPO 2",
+    "120363408404644680@g.us": "GRUPO 3",
+    "120363424434192043@g.us": "GRUPO 4",
+    "120363407782555379@g.us": "GRUPO 5",
+    "120363407782555379@g.us": "GRUPO 6",
+    "1120363427426623452@g.us": "GRUPO 7",
+}
+
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 BOT_INTERNAL_URL = os.getenv("BOT_INTERNAL_URL", "").strip()
 BOT_INTERNAL_TOKEN = os.getenv("BOT_INTERNAL_TOKEN", "").strip()
@@ -322,7 +332,7 @@ def evolution_webhook():
         from_me = msg["from_me"]
         text = msg["text"]
         push_name = msg["push_name"] or "Usuario"
-        group_name = msg.get("group_name") or remote_jid
+        group_name = GROUP_NAME_MAP.get(remote_jid) or msg.get("group_name") or remote_jid
 
         print("[GROUP NAME FINAL BEFORE JOB]", repr(group_name), flush=True)
         print("[REMOTE JID]", repr(remote_jid), flush=True)
