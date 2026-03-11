@@ -79,6 +79,57 @@ IDCIF_REGEX = re.compile(r"^\d{11}$")
 # MUNICIPIO, ENTIDAD
 LUGAR_REGEX = re.compile(r"^[A-ZÁÉÍÓÚÜÑ\s]+\s*,\s*[A-ZÁÉÍÓÚÜÑ\s]+$")
 
+def _looks_like_curp(value: str) -> bool:
+    v = re.sub(r"\s+", "", _normalize_upper(value))
+    if not v:
+        return False
+
+    # Si empieza parecido a CURP: 4 letras + al menos algunos dígitos después
+    if re.match(r"^[A-Z]{4}\d{4,}", v):
+        return True
+
+    # O si es alfanumérico largo, típico de captura de CURP
+    if re.fullmatch(r"[A-Z0-9]{15,20}", v):
+        return True
+
+    return False
+
+def _looks_like_rfc(value: str) -> bool:
+    v = re.sub(r"\s+", "", _normalize_upper(value))
+    if not v:
+        return False
+
+    # Si empieza como RFC física o moral
+    if re.match(r"^[A-ZÑ&]{3,4}\d{4,}", v):
+        return True
+
+    # O si es alfanumérico de largo típico RFC
+    if re.fullmatch(r"[A-ZÑ&0-9]{10,14}", v):
+        return True
+
+    return False
+
+def _looks_like_idcif(value: str) -> bool:
+    v = re.sub(r"\s+", "", value or "")
+    if not v:
+        return False
+    return bool(re.fullmatch(r"\d{8,14}", v))
+
+def _looks_like_lugar(value: str) -> bool:
+    v = _normalize_upper(value)
+    if not v:
+        return False
+
+    # con coma
+    if "," in v:
+        return True
+
+    # dos o más palabras solo letras
+    if re.fullmatch(r"[A-ZÁÉÍÓÚÜÑ\s]+", v) and " " in v:
+        return True
+
+    return False
+
 def _clean_spaces(text: str) -> str:
     text = (text or "").replace("\r", "\n")
     text = re.sub(r"[ \t]+", " ", text)
@@ -192,7 +243,7 @@ def _parse_command(text: str):
     lines = [line.strip() for line in normalized.split("\n") if line.strip()]
 
     # -------------------------------------------------
-    # 1) CURP exacto
+    # 1) VÁLIDOS EXACTOS
     # -------------------------------------------------
     if _is_curp(normalized):
         return {
@@ -202,9 +253,6 @@ def _parse_command(text: str):
             "error": None
         }
 
-    # -------------------------------------------------
-    # 2) RFC exacto
-    # -------------------------------------------------
     if _is_rfc(normalized):
         return {
             "ok": True,
@@ -213,9 +261,6 @@ def _parse_command(text: str):
             "error": None
         }
 
-    # -------------------------------------------------
-    # 3) IDCIF exacto
-    # -------------------------------------------------
     if _is_idcif(normalized):
         return {
             "ok": True,
@@ -224,12 +269,6 @@ def _parse_command(text: str):
             "error": None
         }
 
-    # -------------------------------------------------
-    # 4) CURP + lugar
-    #    Ejemplo:
-    #    CASE020722HTSRNDA8
-    #    REYNOSA, TAMAULIPAS
-    # -------------------------------------------------
     if len(lines) >= 2:
         found_curp = None
         found_rfc = None
@@ -244,7 +283,6 @@ def _parse_command(text: str):
             if not found_idcif and _is_idcif(line):
                 found_idcif = line
 
-        # CURP + lugar
         if found_curp and found_lugar and not found_rfc and not found_idcif:
             return {
                 "ok": True,
@@ -253,7 +291,6 @@ def _parse_command(text: str):
                 "error": None
             }
 
-        # RFC + lugar
         if found_rfc and found_lugar and not found_curp and not found_idcif:
             return {
                 "ok": True,
@@ -262,7 +299,6 @@ def _parse_command(text: str):
                 "error": None
             }
 
-        # RFC + IDCIF
         if found_rfc and found_idcif and not found_curp and not found_lugar:
             return {
                 "ok": True,
@@ -271,7 +307,6 @@ def _parse_command(text: str):
                 "error": None
             }
 
-        # RFC + IDCIF + lugar
         if found_rfc and found_idcif and found_lugar and not found_curp:
             return {
                 "ok": True,
@@ -280,14 +315,10 @@ def _parse_command(text: str):
                 "error": None
             }
 
-    # -------------------------------------------------
-    # 5) Texto corrido: buscar combinaciones dentro del texto
-    # -------------------------------------------------
     found_curp = _extract_exact_curp(normalized)
     found_rfc = _extract_exact_rfc(normalized)
     found_idcif = _extract_exact_idcif(normalized)
 
-    # buscar línea/segmento con coma como lugar
     possible_parts = [p.strip() for p in re.split(r"\n|;", normalized) if p.strip()]
     found_lugar = None
     for p in possible_parts:
@@ -295,7 +326,6 @@ def _parse_command(text: str):
             found_lugar = p
             break
 
-    # CURP + lugar en texto corrido
     if found_curp and found_lugar and not found_rfc and not found_idcif:
         return {
             "ok": True,
@@ -304,7 +334,6 @@ def _parse_command(text: str):
             "error": None
         }
 
-    # RFC + lugar en texto corrido
     if found_rfc and found_lugar and not found_curp and not found_idcif:
         return {
             "ok": True,
@@ -313,7 +342,6 @@ def _parse_command(text: str):
             "error": None
         }
 
-    # RFC + IDCIF en texto corrido
     if found_rfc and found_idcif and not found_curp and not found_lugar:
         return {
             "ok": True,
@@ -322,7 +350,6 @@ def _parse_command(text: str):
             "error": None
         }
 
-    # RFC + IDCIF + lugar en texto corrido
     if found_rfc and found_idcif and found_lugar and not found_curp:
         return {
             "ok": True,
@@ -332,74 +359,68 @@ def _parse_command(text: str):
         }
 
     # -------------------------------------------------
-    # 6) Casos parecidos pero mal escritos
+    # 2) INVÁLIDOS ESPECÍFICOS POR LÍNEA
     # -------------------------------------------------
 
-    compact = re.sub(r"\s+", "", normalized)
+    non_id_lines = []
 
-    # Parece CURP pero mal
-    if re.fullmatch(r"[A-Z0-9]{18}", compact):
-        return {
-            "ok": False,
-            "type": "invalid_curp",
-            "query": None,
-            "error": (
-                "⚠️ CURP inválida.\nDebe tener 18 caracteres con formato correcto.\nEjemplo: CASE020722HTSRNDA8"
-            )
-        }
+    for line in lines:
+        if _looks_like_curp(line) and not _is_curp(line):
+            return {
+                "ok": False,
+                "type": "invalid_curp",
+                "query": None,
+                "error": (
+                    "⚠️ CURP inválida.\n"
+                    "Debe tener 18 caracteres con formato correcto.\n"
+                    "Ejemplo: CASE020722HTSRNDA8"
+                )
+            }
 
-    # Parece RFC pero mal
-    if re.fullmatch(r"[A-ZÑ&0-9]{12,13}", compact):
-        return {
-            "ok": False,
-            "type": "invalid_rfc",
-            "query": None,
-            "error": (
-                "⚠️ RFC inválido.\nPersona física: 13 caracteres.\nPersona moral: 12 caracteres.\nEjemplo: HJAS020512MP6 / VFG980115TA3"
-            )
-        }
+        if _looks_like_rfc(line) and not _is_rfc(line):
+            return {
+                "ok": False,
+                "type": "invalid_rfc",
+                "query": None,
+                "error": (
+                    "⚠️ RFC inválido.\n"
+                    "Persona física: 13 caracteres.\n"
+                    "Persona moral: 12 caracteres.\n"
+                    "Ejemplo: HJAS020512MP6 / VFG980115TA3"
+                )
+            }
 
-    # Parece IDCIF pero mal
-    if re.fullmatch(r"\d{1,15}", compact):
-        return {
-            "ok": False,
-            "type": "invalid_idcif",
-            "query": None,
-            "error": (
-                "⚠️ IDCIF inválido.\nDebe contener únicamente 11 dígitos.\nEjemplo: 15322415263"
-            )
-        }
+        if _looks_like_idcif(line) and not _is_idcif(line):
+            return {
+                "ok": False,
+                "type": "invalid_idcif",
+                "query": None,
+                "error": (
+                    "⚠️ IDCIF inválido.\n"
+                    "Debe contener únicamente 11 dígitos.\n"
+                    "Ejemplo: 15322415263"
+                )
+            }
 
-    # Líneas que no son CURP/RFC/IDCIF, candidatas a ser lugar
-    non_id_lines = [
-        line for line in lines
-        if not _is_curp(line) and not _is_rfc(line) and not _is_idcif(line)
-    ]
+        if not _is_curp(line) and not _is_rfc(line) and not _is_idcif(line):
+            non_id_lines.append(line)
 
-    # Lugar con coma pero mal escrito
-    if any("," in line for line in non_id_lines):
-        if not any(_is_lugar(line) for line in non_id_lines):
+    for line in non_id_lines:
+        if _looks_like_lugar(line) and not _is_lugar(line):
             return {
                 "ok": False,
                 "type": "invalid_lugar",
                 "query": None,
                 "error": (
-                    "⚠️ Lugar inválido.\nDebes escribir municipio y entidad separados por coma.\nEjemplo: MATAMOROS, TAMAULIPAS"
+                    "⚠️ Lugar inválido.\n"
+                    "Debes escribir municipio y entidad separados por coma.\n"
+                    "Ejemplo: MATAMOROS, TAMAULIPAS"
                 )
             }
 
-    # Parece lugar pero sin coma
-    if any(re.fullmatch(r"[A-ZÁÉÍÓÚÜÑ\s]+", line) and " " in line for line in non_id_lines):
-        return {
-            "ok": False,
-            "type": "invalid_lugar",
-            "query": None,
-            "error": (
-                "⚠️ Lugar inválido.\nDebes escribir municipio y entidad separados por coma.\nEjemplo: MATAMOROS, TAMAULIPAS"
-            )
-        }
-
-    # Error genérico
+    # -------------------------------------------------
+    # 3) ERROR GENÉRICO
+    # -------------------------------------------------
     return {
         "ok": False,
         "type": "invalid_format",
