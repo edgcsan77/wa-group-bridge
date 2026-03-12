@@ -58,6 +58,7 @@ GROUP_NAME_MAP = {
     "120363406852977870@g.us": "NEGOCIO CIBERT ALMA",
     "120363421904462408@g.us": "VERACRUZ",
     "120363425323721713@g.us": "PRUEBA DOCIFY MX",
+    "120363423742899713@g.us": "JOYA",
 }
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -73,10 +74,155 @@ def _safe(v):
 def _normalize_phone(v: str) -> str:
     return re.sub(r"\D+", "", v or "")
 
+def _clean_spaces(text: str) -> str:
+    text = (text or "").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n+", "\n", text)
+    return text.strip()
+
+def _normalize_upper(text: str) -> str:
+    return _clean_spaces((text or "").upper())
+
+def _format_input_error():
+    return ""
+
+def _looks_like_curp(value: str) -> bool:
+    v = re.sub(r"\s+", "", _normalize_upper(value))
+    if not v:
+        return False
+
+    if len(v) < 16 or len(v) > 20:
+        return False
+
+    if not re.match(r"^[A-Z]{4}\d{6}", v):
+        return False
+
+    return bool(re.fullmatch(r"[A-Z0-9]{16,20}", v))
+
+def _looks_like_rfc(value: str) -> bool:
+    v = re.sub(r"\s+", "", _normalize_upper(value))
+    if not v:
+        return False
+
+    if len(v) < 11 or len(v) > 14:
+        return False
+
+    if re.match(r"^[A-ZÑ&]{3,4}\d{5,}", v):
+        return True
+
+    return bool(re.fullmatch(r"[A-ZÑ&0-9]{11,14}", v))
+
+def _looks_like_idcif(value: str) -> bool:
+    v = re.sub(r"\s+", "", value or "")
+    if not v:
+        return False
+    return bool(re.fullmatch(r"\d{8,14}", v))
+
+def _is_text_candidate(text: str) -> bool:
+    """
+    Decide si el texto parece realmente una consulta para el bot
+    o solo conversación normal del grupo.
+    """
+    raw = _safe(text)
+    if not raw:
+        return False
+
+    normalized = _normalize_upper(raw)
+    lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
+    lines = [line for line in lines if line]
+
+    curp_pattern = r"^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$"
+    rfc_pattern = r"^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$"
+    idcif_pattern = r"^\d{11}$"
+    lugar_pattern = r"^[A-ZÁÉÍÓÚÜÑ\s]+,\s*[A-ZÁÉÍÓÚÜÑ\s]+$"
+
+    # Exactos válidos
+    if re.fullmatch(curp_pattern, normalized):
+        return True
+    if re.fullmatch(rfc_pattern, normalized):
+        return True
+    if re.fullmatch(idcif_pattern, normalized):
+        return True
+    if re.fullmatch(lugar_pattern, normalized):
+        return True
+
+    # Por línea
+    strong_hits = 0
+    for line in lines:
+        if re.fullmatch(curp_pattern, line):
+            strong_hits += 1
+            continue
+        if re.fullmatch(rfc_pattern, line):
+            strong_hits += 1
+            continue
+        if re.fullmatch(idcif_pattern, line):
+            strong_hits += 1
+            continue
+        if re.fullmatch(lugar_pattern, line):
+            strong_hits += 1
+            continue
+
+        # Parecidos fuertes
+        if _looks_like_rfc(line):
+            strong_hits += 1
+            continue
+        if _looks_like_curp(line):
+            strong_hits += 1
+            continue
+        if _looks_like_idcif(line):
+            strong_hits += 1
+            continue
+
+    # Si hay al menos una línea muy sospechosa, sí procesar
+    if strong_hits >= 1:
+        return True
+
+    # Texto corrido con RFC + IDCIF o CURP + lugar
+    if re.search(r"[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}", normalized) and re.search(r"\b\d{11}\b", normalized):
+        return True
+
+    if re.search(r"[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d", normalized) and "," in normalized:
+        return True
+
+    if re.search(r"[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}", normalized) and "," in normalized:
+        return True
+
+    return False
+
+def _looks_like_lugar(value: str) -> bool:
+    v = _normalize_upper(value)
+    if not v:
+        return False
+
+    # Solo considerar lugar si trae coma
+    if "," not in v:
+        return False
+
+    # Debe verse como dos partes de solo letras/espacios
+    parts = [p.strip() for p in v.split(",", 1)]
+    if len(parts) != 2:
+        return False
+
+    left, right = parts
+    if not left or not right:
+        return False
+
+    if not re.fullmatch(r"[A-ZÁÉÍÓÚÜÑ\s]+", left):
+        return False
+    if not re.fullmatch(r"[A-ZÁÉÍÓÚÜÑ\s]+", right):
+        return False
+
+    return True
+
 def _parse_command(text: str):
     t = _safe(text)
     if not t:
-        return None
+        return {
+            "ok": False,
+            "type": "empty",
+            "query": None,
+            "error": _format_input_error()
+        }
 
     raw = t.strip()
 
@@ -84,83 +230,221 @@ def _parse_command(text: str):
     if GROUP_COMMAND:
         cmd = GROUP_COMMAND.strip()
         if raw.lower() == cmd.lower():
-            return None
+            return {
+                "ok": False,
+                "type": "empty",
+                "query": None,
+                "error": _format_input_error()
+            }
+
         if raw.lower().startswith((cmd + " ").lower()) or raw.lower().startswith((cmd + "\n").lower()):
             raw = raw[len(cmd):].strip()
 
     if not raw:
-        return None
+        return {
+            "ok": False,
+            "type": "empty",
+            "query": None,
+            "error": _format_input_error()
+        }
 
-    upper_raw = raw.upper()
+    upper_raw = _normalize_upper(raw)
     flat = re.sub(r"[ \t]+", " ", upper_raw).strip()
 
     # patrones
     curp_pattern = r"[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d"
     rfc_pattern = r"[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}"
     idcif_pattern = r"\d{11}"
-
-    # lugar de emisión: MUNICIPIO, ENTIDAD
     lugar_pattern = r"[A-ZÁÉÍÓÚÜÑ\s]+,\s*[A-ZÁÉÍÓÚÜÑ\s]+"
 
+    lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
+    lines = [line for line in lines if line]
+
     # -------------------------------------------------
-    # 1) CURP exacto
+    # 1) VÁLIDOS EXACTOS
     # -------------------------------------------------
     if re.fullmatch(curp_pattern, flat):
-        return flat
+        return {
+            "ok": True,
+            "type": "curp",
+            "query": flat,
+            "error": None
+        }
 
-    # -------------------------------------------------
-    # 2) RFC exacto
-    # -------------------------------------------------
     if re.fullmatch(rfc_pattern, flat):
-        return flat
+        return {
+            "ok": True,
+            "type": "rfc",
+            "query": flat,
+            "error": None
+        }
 
-    # -------------------------------------------------
-    # 3) CURP + lugar (multilínea o corrido)
-    # -------------------------------------------------
+    if re.fullmatch(idcif_pattern, flat):
+        return {
+            "ok": True,
+            "type": "idcif",
+            "query": flat,
+            "error": None
+        }
+
+    # CURP + lugar
     if re.search(rf"\b{curp_pattern}\b", upper_raw) and re.search(lugar_pattern, upper_raw):
-        return upper_raw
+        return {
+            "ok": True,
+            "type": "curp_lugar",
+            "query": upper_raw,
+            "error": None
+        }
 
-    # -------------------------------------------------
-    # 4) RFC ONLY + lugar (multilínea o corrido)
-    # -------------------------------------------------
+    # RFC + lugar
     if re.search(rf"\b{rfc_pattern}\b", upper_raw) and not re.search(rf"\b{idcif_pattern}\b", upper_raw) and re.search(lugar_pattern, upper_raw):
-        return upper_raw
+        return {
+            "ok": True,
+            "type": "rfc_lugar",
+            "query": upper_raw,
+            "error": None
+        }
 
-    # -------------------------------------------------
-    # 5) RFC + IDCIF (si además trae lugar, conservar TODO)
-    # -------------------------------------------------
+    # RFC + IDCIF
     rfc_match = re.search(rf"\b({rfc_pattern})\b", upper_raw)
     idcif_match = re.search(rf"\b({idcif_pattern})\b", upper_raw)
 
     if rfc_match and idcif_match:
         if re.search(lugar_pattern, upper_raw):
-            return upper_raw
+            return {
+                "ok": True,
+                "type": "rfc_idcif_lugar",
+                "query": upper_raw,
+                "error": None
+            }
+
         rfc = rfc_match.group(1)
         idcif = idcif_match.group(1)
-        return f"RFC: {rfc}\nIDCIF: {idcif}"
+        return {
+            "ok": True,
+            "type": "rfc_idcif",
+            "query": f"RFC: {rfc}\nIDCIF: {idcif}",
+            "error": None
+        }
 
-    # -------------------------------------------------
-    # 6) RFC + IDCIF separados en líneas
-    # -------------------------------------------------
-    lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
-    lines = [line for line in lines if line]
-
+    # RFC + IDCIF separados en líneas
     if len(lines) >= 2:
         found_rfc = None
         found_idcif = None
+        found_curp = None
+        found_lugar = None
 
         for line in lines:
             if not found_rfc and re.fullmatch(rfc_pattern, line):
                 found_rfc = line
             if not found_idcif and re.fullmatch(idcif_pattern, line):
                 found_idcif = line
+            if not found_curp and re.fullmatch(curp_pattern, line):
+                found_curp = line
+            if not found_lugar and re.fullmatch(lugar_pattern, line):
+                found_lugar = line
 
-        if found_rfc and found_idcif:
-            if any("," in line for line in lines):
-                return "\n".join(lines)
-            return f"RFC: {found_rfc}\nIDCIF: {found_idcif}"
+        if found_curp and found_lugar and not found_rfc and not found_idcif:
+            return {
+                "ok": True,
+                "type": "curp_lugar",
+                "query": f"{found_curp}\n{found_lugar}",
+                "error": None
+            }
 
-    return None
+        if found_rfc and found_lugar and not found_curp and not found_idcif:
+            return {
+                "ok": True,
+                "type": "rfc_lugar",
+                "query": f"{found_rfc}\n{found_lugar}",
+                "error": None
+            }
+
+        if found_rfc and found_idcif and not found_curp and not found_lugar:
+            return {
+                "ok": True,
+                "type": "rfc_idcif",
+                "query": f"RFC: {found_rfc}\nIDCIF: {found_idcif}",
+                "error": None
+            }
+
+        if found_rfc and found_idcif and found_lugar and not found_curp:
+            return {
+                "ok": True,
+                "type": "rfc_idcif_lugar",
+                "query": f"RFC: {found_rfc}\nIDCIF: {found_idcif}\n{found_lugar}",
+                "error": None
+            }
+
+    # -------------------------------------------------
+    # 2) INVÁLIDOS ESPECÍFICOS POR LÍNEA
+    # -------------------------------------------------
+    non_id_lines = []
+
+    for line in lines if lines else [flat]:
+        # RFC primero para que no se lo robe CURP
+        if _looks_like_rfc(line) and not re.fullmatch(rfc_pattern, line):
+            return {
+                "ok": False,
+                "type": "invalid_rfc",
+                "query": None,
+                "error": (
+                    "⚠️ RFC inválido.\n"
+                    "Persona física: 13 caracteres.\n"
+                    "Persona moral: 12 caracteres.\n"
+                )
+            }
+
+        if _looks_like_curp(line) and not re.fullmatch(curp_pattern, line):
+            return {
+                "ok": False,
+                "type": "invalid_curp",
+                "query": None,
+                "error": (
+                    "⚠️ CURP inválida.\n"
+                    "Debe tener 18 caracteres con formato correcto.\n"
+                )
+            }
+
+        if _looks_like_idcif(line) and not re.fullmatch(idcif_pattern, line):
+            return {
+                "ok": False,
+                "type": "invalid_idcif",
+                "query": None,
+                "error": (
+                    "⚠️ IDCIF inválido.\n"
+                    "Debe contener únicamente 11 dígitos.\n"
+                )
+            }
+
+        if (
+            not re.fullmatch(curp_pattern, line)
+            and not re.fullmatch(rfc_pattern, line)
+            and not re.fullmatch(idcif_pattern, line)
+        ):
+            non_id_lines.append(line)
+
+    for line in non_id_lines:
+        if _looks_like_lugar(line) and not re.fullmatch(lugar_pattern, line):
+            return {
+                "ok": False,
+                "type": "invalid_lugar",
+                "query": None,
+                "error": (
+                    "⚠️ Lugar inválido.\n"
+                    "Debes escribir municipio y entidad separados por coma.\n"
+                )
+            }
+
+    # -------------------------------------------------
+    # 3) ERROR GENÉRICO
+    # -------------------------------------------------
+    return {
+        "ok": False,
+        "type": "invalid_format",
+        "query": None,
+        "error": _format_input_error()
+    }
 
 PANEL_TZ = os.getenv("PANEL_TZ", "America/Monterrey").strip()
 
@@ -385,15 +669,35 @@ def evolution_webhook():
         media_id = msg["media_id"]
         mime_type = msg["mime_type"]
         
-        query = _parse_command(text)
-        
+        # En texto, solo procesar si realmente parece consulta del bot
+        if msg_type == "text" and not _is_text_candidate(text):
+            return jsonify({"ok": True, "ignored": "chat_text"}), 200
+
+        parsed = _parse_command(text)
+
         is_media_candidate = (
             msg_type in ("image", "document")
             and bool(media_id)
         )
         
-        if not query and not is_media_candidate:
-            return jsonify({"ok": True, "ignored": "no_command"}), 200
+        # Si NO es media y además el texto es inválido, responder error al usuario
+        if not is_media_candidate:
+            if not parsed.get("ok"):
+                try:
+                    evolution_send_text(
+                        group_jid=remote_jid,
+                        text=parsed.get("error") or _format_input_error()
+                    )
+                except Exception as e:
+                    print("validation sendText error:", repr(e), flush=True)
+        
+                return jsonify({
+                    "ok": True,
+                    "ignored": "invalid_input",
+                    "reason": parsed.get("type")
+                }), 200
+        
+        query = parsed.get("query")
 
         requester_number = _normalize_phone(
             participant.replace("@s.whatsapp.net", "").replace("@lid", "")
@@ -431,6 +735,7 @@ def evolution_webhook():
             "group_name": group_name,
             "original_text": text,
             "query": query,
+            "query_type": parsed.get("type") if not is_media_candidate else msg_type,
             "msg_type": msg_type,
             "media_id": media_id,
             "mime_type": mime_type,
