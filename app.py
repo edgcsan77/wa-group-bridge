@@ -107,10 +107,13 @@ def _looks_like_rfc(value: str) -> bool:
     if len(v) < 11 or len(v) > 14:
         return False
 
-    if re.match(r"^[A-ZÑ&]{3,4}\d{5,}", v):
-        return True
+    if not re.match(r"^[A-ZÑ&]{3,4}", v):
+        return False
 
-    return bool(re.fullmatch(r"[A-ZÑ&0-9]{11,14}", v))
+    if not re.search(r"\d{5,}", v):
+        return False
+
+    return True
 
 def _looks_like_idcif(value: str) -> bool:
     v = re.sub(r"\s+", "", value or "")
@@ -375,6 +378,27 @@ def _parse_command(text: str):
                 "query": f"RFC: {found_rfc}\nIDCIF: {found_idcif}\n{found_lugar}",
                 "error": None
             }
+
+    # -------------------------------------------------
+    # 2-A) CASO CONTEXTUAL: RFC válido + segunda línea inválida
+    # -------------------------------------------------
+    if len(lines) == 2:
+        first_line = lines[0]
+        second_line = lines[1]
+
+        # Si la primera línea es RFC válido y la segunda no es lugar
+        if re.fullmatch(rfc_pattern, first_line) and not re.fullmatch(lugar_pattern, second_line):
+            # Si la segunda línea no es IDCIF válido, tratarla como IDCIF inválido
+            if not re.fullmatch(idcif_pattern, second_line):
+                return {
+                    "ok": False,
+                    "type": "invalid_idcif",
+                    "query": None,
+                    "error": (
+                        "⚠️ IDCIF inválido.\n"
+                        "Debe contener únicamente 11 dígitos.\n"
+                    )
+                }
 
     # -------------------------------------------------
     # 2) INVÁLIDOS ESPECÍFICOS POR LÍNEA
