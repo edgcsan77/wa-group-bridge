@@ -4,7 +4,7 @@ import hashlib
 import traceback
 import requests
 import base64
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, redirect
 from redis import Redis
 from rq import Queue
 
@@ -67,6 +67,48 @@ BOT_INTERNAL_TOKEN = os.getenv("BOT_INTERNAL_TOKEN", "").strip()
 
 redis_conn = Redis.from_url(REDIS_URL)
 task_queue = Queue("constancia_jobs", connection=redis_conn)
+
+# =========================
+# BLOQUEO DE GRUPOS
+# =========================
+BLOCKED_GROUPS_KEY = "blocked_groups"
+
+def is_group_blocked(group_jid: str) -> bool:
+    try:
+        if not group_jid:
+            return False
+        return bool(redis_conn.sismember(BLOCKED_GROUPS_KEY, group_jid))
+    except Exception as e:
+        print("is_group_blocked error:", repr(e), flush=True)
+        return False
+
+def block_group(group_jid: str):
+    try:
+        if group_jid:
+            redis_conn.sadd(BLOCKED_GROUPS_KEY, group_jid)
+    except Exception as e:
+        print("block_group error:", repr(e), flush=True)
+
+def unblock_group(group_jid: str):
+    try:
+        if group_jid:
+            redis_conn.srem(BLOCKED_GROUPS_KEY, group_jid)
+    except Exception as e:
+        print("unblock_group error:", repr(e), flush=True)
+
+def get_blocked_groups() -> set:
+    try:
+        vals = redis_conn.smembers(BLOCKED_GROUPS_KEY) or set()
+        out = set()
+        for v in vals:
+            if isinstance(v, bytes):
+                out.add(v.decode("utf-8", errors="ignore"))
+            else:
+                out.add(str(v))
+        return out
+    except Exception as e:
+        print("get_blocked_groups error:", repr(e), flush=True)
+        return set()
 
 def _safe(v):
     return (v or "").strip() if isinstance(v, str) else (str(v).strip() if v is not None else "")
@@ -513,8 +555,10 @@ def _to_str(v):
 def _panel_load_today_rows():
     day = _panel_day_str()
     prefix = f"panel_stats:{day}:group:"
-    rows = []
+    rows_map = {}
+    blocked = get_blocked_groups()
 
+    # 1) cargar grupos con actividad hoy
     for key in redis_conn.scan_iter(match=prefix + "*"):
         key_s = _to_str(key)
 
@@ -524,7 +568,7 @@ def _panel_load_today_rows():
         group_jid = raw.get("group_jid") or key_s.split(":group:", 1)[-1]
         group_name = GROUP_NAME_MAP.get(group_jid) or raw.get("group_name") or group_jid
 
-        row = {
+        rows_map[group_jid] = {
             "group_jid": group_jid,
             "group_name": group_name,
             "total": _safe_int(raw.get("total")),
@@ -536,10 +580,47 @@ def _panel_load_today_rows():
             "ok_rfc_only": _safe_int(raw.get("ok_rfc_only")),
             "updated_at": raw.get("updated_at") or "",
             "day": raw.get("day") or day,
+            "blocked": group_jid in blocked,
         }
-        rows.append(row)
 
-    rows.sort(key=lambda x: (-x["total"], x["group_name"], x["group_jid"]))
+    # 2) agregar grupos del mapa aunque no tengan actividad hoy
+    for group_jid, group_name in GROUP_NAME_MAP.items():
+        if group_jid not in rows_map:
+            rows_map[group_jid] = {
+                "group_jid": group_jid,
+                "group_name": group_name,
+                "total": 0,
+                "ok_rfc_idcif_qr": 0,
+                "ok_rfc_clon": 0,
+                "ok_rfc_idcif": 0,
+                "ok_qr": 0,
+                "ok_curp": 0,
+                "ok_rfc_only": 0,
+                "updated_at": "",
+                "day": day,
+                "blocked": group_jid in blocked,
+            }
+
+    # 3) agregar grupos bloqueados aunque no estén en stats ni en GROUP_NAME_MAP
+    for group_jid in blocked:
+        if group_jid not in rows_map:
+            rows_map[group_jid] = {
+                "group_jid": group_jid,
+                "group_name": GROUP_NAME_MAP.get(group_jid) or group_jid,
+                "total": 0,
+                "ok_rfc_idcif_qr": 0,
+                "ok_rfc_clon": 0,
+                "ok_rfc_idcif": 0,
+                "ok_qr": 0,
+                "ok_curp": 0,
+                "ok_rfc_only": 0,
+                "updated_at": "",
+                "day": day,
+                "blocked": True,
+            }
+
+    rows = list(rows_map.values())
+    rows.sort(key=lambda x: (x["blocked"] == False, -x["total"], x["group_name"], x["group_jid"]))
     return rows
 
 def _panel_summary(rows):
@@ -676,6 +757,9 @@ def evolution_webhook():
         if not remote_jid.endswith("@g.us"):
             return jsonify({"ok": True, "ignored": "not_group"}), 200
 
+        if is_group_blocked(remote_jid):
+            return jsonify({"ok": True, "ignored": "group_blocked"}), 200
+
         if ALLOWED_GROUPS and remote_jid not in ALLOWED_GROUPS:
             return jsonify({"ok": True, "ignored": "group_not_allowed"}), 200
 
@@ -796,6 +880,34 @@ def panel_api_stats():
         "summary": summary,
         "rows": rows,
     }), 200
+
+@app.post("/panel/block-group")
+def panel_block_group():
+    try:
+        group_jid = _safe(request.form.get("group_jid"))
+        if not group_jid:
+            return "group_jid requerido", 400
+
+        block_group(group_jid)
+        return redirect("/panel")
+    except Exception as e:
+        print("panel_block_group error:", repr(e), flush=True)
+        traceback.print_exc()
+        return "error bloqueando grupo", 500
+
+@app.post("/panel/unblock-group")
+def panel_unblock_group():
+    try:
+        group_jid = _safe(request.form.get("group_jid"))
+        if not group_jid:
+            return "group_jid requerido", 400
+
+        unblock_group(group_jid)
+        return redirect("/panel")
+    except Exception as e:
+        print("panel_unblock_group error:", repr(e), flush=True)
+        traceback.print_exc()
+        return "error desbloqueando grupo", 500
 
 @app.get("/panel")
 def panel_stats():
@@ -1058,6 +1170,59 @@ def panel_stats():
       background: white;
     }}
 
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: .82rem;
+    }
+    
+    .status-active {
+      background: #ecfdf5;
+      color: #15803d;
+    }
+    
+    .status-blocked {
+      background: #fef2f2;
+      color: #b91c1c;
+    }
+    
+    .action-form {
+      margin: 0;
+    }
+    
+    .btn {
+      border: none;
+      border-radius: 10px;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: .85rem;
+    }
+    
+    .btn-block {
+      background: #dc2626;
+      color: white;
+    }
+    
+    .btn-unblock {
+      background: #16a34a;
+      color: white;
+    }
+    
+    .btn:hover {
+      opacity: .92;
+    }
+    
+    @media (max-width: 720px) {
+      .btn {
+        width: 100%;
+      }
+    }
+
     @media (max-width: 1200px) {{
       .cards {{
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1219,12 +1384,14 @@ def panel_stats():
           <thead>
             <tr>
               <th>Grupo</th>
+              <th>Estado</th>
               <th class="right">Total</th>
               <th class="right">RFC_IDCIF</th>
               <th class="right">QR</th>
               <th class="right">CURP</th>
               <th class="right">RFC_solo</th>
               <th>Actualizado</th>
+              <th>Acción</th>
             </tr>
           </thead>
           <tbody>
@@ -1232,19 +1399,43 @@ def panel_stats():
 
     if rows:
         for r in rows:
+            blocked = bool(r.get("blocked"))
+            status_html = (
+                '<span class="status-pill status-blocked">BLOQUEADO</span>'
+                if blocked else
+                '<span class="status-pill status-active">ACTIVO</span>'
+            )
+    
+            if blocked:
+                action_html = f"""
+                <form class="action-form" method="post" action="/panel/unblock-group">
+                  <input type="hidden" name="group_jid" value="{esc(r["group_jid"])}">
+                  <button class="btn btn-unblock" type="submit">Desbloquear</button>
+                </form>
+                """
+            else:
+                action_html = f"""
+                <form class="action-form" method="post" action="/panel/block-group">
+                  <input type="hidden" name="group_jid" value="{esc(r["group_jid"])}">
+                  <button class="btn btn-block" type="submit">Bloquear</button>
+                </form>
+                """
+    
             html += f"""
-            <tr>
-              <td data-label="Grupo">
-                <div class="group-name">{esc(r["group_name"])}</div>
-                <div class="group-id">{esc(r["group_jid"])}</div>
-              </td>
-              <td data-label="Total" class="right"><span class="badge total-badge">{esc(r["total"])}</span></td>
-              <td data-label="RFC_IDCIF" class="right"><span class="badge">{esc(r["ok_rfc_idcif"])}</span></td>
-              <td data-label="QR" class="right"><span class="badge">{esc(r["ok_qr"])}</span></td>
-              <td data-label="CURP" class="right"><span class="badge">{esc(r["ok_curp"])}</span></td>
-              <td data-label="RFC_solo" class="right"><span class="badge">{esc(r["ok_rfc_only"])}</span></td>
-              <td data-label="Actualizado"><span class="muted">{esc(r["updated_at"])}</span></td>
-            </tr>
+                <tr>
+                  <td data-label="Grupo">
+                    <div class="group-name">{esc(r["group_name"])}</div>
+                    <div class="group-id">{esc(r["group_jid"])}</div>
+                  </td>
+                  <td data-label="Estado">{status_html}</td>
+                  <td data-label="Total" class="right"><span class="badge total-badge">{esc(r["total"])}</span></td>
+                  <td data-label="RFC_IDCIF" class="right"><span class="badge">{esc(r["ok_rfc_idcif"])}</span></td>
+                  <td data-label="QR" class="right"><span class="badge">{esc(r["ok_qr"])}</span></td>
+                  <td data-label="CURP" class="right"><span class="badge">{esc(r["ok_curp"])}</span></td>
+                  <td data-label="RFC_solo" class="right"><span class="badge">{esc(r["ok_rfc_only"])}</span></td>
+                  <td data-label="Actualizado"><span class="muted">{esc(r["updated_at"])}</span></td>
+                  <td data-label="Acción">{action_html}</td>
+                </tr>
             """
     else:
         html += """
