@@ -1170,7 +1170,7 @@ def panel_stats():
       background: white;
     }}
 
-    .status-pill {
+    .status-pill {{
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1178,50 +1178,50 @@ def panel_stats():
       border-radius: 999px;
       font-weight: 700;
       font-size: .82rem;
-    }
+    }}
     
-    .status-active {
+    .status-active {{
       background: #ecfdf5;
       color: #15803d;
-    }
+    }}
     
-    .status-blocked {
+    .status-blocked {{
       background: #fef2f2;
       color: #b91c1c;
-    }
+    }}
     
-    .action-form {
+    .action-form {{
       margin: 0;
-    }
+    }}
     
-    .btn {
+    .btn {{
       border: none;
       border-radius: 10px;
       padding: 9px 12px;
       font-weight: 700;
       cursor: pointer;
       font-size: .85rem;
-    }
+    }}
     
-    .btn-block {
+    .btn-block {{
       background: #dc2626;
       color: white;
-    }
+    }}
     
-    .btn-unblock {
+    .btn-unblock {{
       background: #16a34a;
       color: white;
-    }
+    }}
     
-    .btn:hover {
+    .btn:hover {{
       opacity: .92;
-    }
+    }}
     
-    @media (max-width: 720px) {
-      .btn {
+    @media (max-width: 720px) {{
+      .btn {{
         width: 100%;
-      }
-    }
+      }}
+    }}
 
     @media (max-width: 1200px) {{
       .cards {{
