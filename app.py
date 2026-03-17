@@ -9,7 +9,7 @@ from redis import Redis
 from rq import Queue
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
@@ -520,6 +520,22 @@ def _panel_now():
 def _panel_day_str():
     return _panel_now().strftime("%Y-%m-%d")
 
+def _panel_week_start(dt=None):
+    dt = dt or _panel_now()
+    start = dt - timedelta(days=dt.weekday())  # lunes
+    return start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+def _panel_week_end(dt=None):
+    return _panel_week_start(dt) + timedelta(days=7)
+
+def _daterange_days(start_dt, end_dt):
+    days = []
+    cur = start_dt
+    while cur < end_dt:
+        days.append(cur.strftime("%Y-%m-%d"))
+        cur += timedelta(days=1)
+    return days
+
 def _safe_int(v, default=0):
     try:
         return int(v or 0)
@@ -552,38 +568,49 @@ def _to_str(v):
         return v.decode("utf-8", errors="ignore")
     return v or ""
 
-def _panel_load_today_rows():
-    day = _panel_day_str()
-    prefix = f"panel_stats:{day}:group:"
+def _panel_load_rows_for_days(days):
     rows_map = {}
     blocked = get_blocked_groups()
 
-    # 1) cargar grupos con actividad hoy
-    for key in redis_conn.scan_iter(match=prefix + "*"):
-        key_s = _to_str(key)
+    for day in days:
+        prefix = f"panel_stats:{day}:group:"
+        for key in redis_conn.scan_iter(match=prefix + "*"):
+            key_s = _to_str(key)
 
-        raw = redis_conn.hgetall(key) or {}
-        raw = {_to_str(k): _to_str(v) for k, v in raw.items()}
+            raw = redis_conn.hgetall(key) or {}
+            raw = {_to_str(k): _to_str(v) for k, v in raw.items()}
 
-        group_jid = raw.get("group_jid") or key_s.split(":group:", 1)[-1]
-        group_name = GROUP_NAME_MAP.get(group_jid) or raw.get("group_name") or group_jid
+            group_jid = raw.get("group_jid") or key_s.split(":group:", 1)[-1]
+            group_name = GROUP_NAME_MAP.get(group_jid) or raw.get("group_name") or group_jid
 
-        rows_map[group_jid] = {
-            "group_jid": group_jid,
-            "group_name": group_name,
-            "total": _safe_int(raw.get("total")),
-            "ok_rfc_idcif_qr": _safe_int(raw.get("ok_rfc_idcif_qr")),
-            "ok_rfc_clon": _safe_int(raw.get("ok_rfc_clon")),
-            "ok_rfc_idcif": _safe_int(raw.get("ok_rfc_idcif")),
-            "ok_qr": _safe_int(raw.get("ok_qr")),
-            "ok_curp": _safe_int(raw.get("ok_curp")),
-            "ok_rfc_only": _safe_int(raw.get("ok_rfc_only")),
-            "updated_at": raw.get("updated_at") or "",
-            "day": raw.get("day") or day,
-            "blocked": group_jid in blocked,
-        }
+            if group_jid not in rows_map:
+                rows_map[group_jid] = {
+                    "group_jid": group_jid,
+                    "group_name": group_name,
+                    "total": 0,
+                    "ok_rfc_idcif_qr": 0,
+                    "ok_rfc_clon": 0,
+                    "ok_rfc_idcif": 0,
+                    "ok_qr": 0,
+                    "ok_curp": 0,
+                    "ok_rfc_only": 0,
+                    "updated_at": "",
+                    "blocked": group_jid in blocked,
+                }
 
-    # 2) agregar grupos del mapa aunque no tengan actividad hoy
+            rows_map[group_jid]["total"] += _safe_int(raw.get("total"))
+            rows_map[group_jid]["ok_rfc_idcif_qr"] += _safe_int(raw.get("ok_rfc_idcif_qr"))
+            rows_map[group_jid]["ok_rfc_clon"] += _safe_int(raw.get("ok_rfc_clon"))
+            rows_map[group_jid]["ok_rfc_idcif"] += _safe_int(raw.get("ok_rfc_idcif"))
+            rows_map[group_jid]["ok_qr"] += _safe_int(raw.get("ok_qr"))
+            rows_map[group_jid]["ok_curp"] += _safe_int(raw.get("ok_curp"))
+            rows_map[group_jid]["ok_rfc_only"] += _safe_int(raw.get("ok_rfc_only"))
+
+            updated_at = raw.get("updated_at") or ""
+            if updated_at and (not rows_map[group_jid]["updated_at"] or updated_at > rows_map[group_jid]["updated_at"]):
+                rows_map[group_jid]["updated_at"] = updated_at
+
+    # incluir grupos del mapa aunque no tengan actividad
     for group_jid, group_name in GROUP_NAME_MAP.items():
         if group_jid not in rows_map:
             rows_map[group_jid] = {
@@ -597,11 +624,10 @@ def _panel_load_today_rows():
                 "ok_curp": 0,
                 "ok_rfc_only": 0,
                 "updated_at": "",
-                "day": day,
                 "blocked": group_jid in blocked,
             }
 
-    # 3) agregar grupos bloqueados aunque no estén en stats ni en GROUP_NAME_MAP
+    # incluir bloqueados aunque no estén en mapa ni stats
     for group_jid in blocked:
         if group_jid not in rows_map:
             rows_map[group_jid] = {
@@ -615,18 +641,26 @@ def _panel_load_today_rows():
                 "ok_curp": 0,
                 "ok_rfc_only": 0,
                 "updated_at": "",
-                "day": day,
                 "blocked": True,
             }
 
     rows = list(rows_map.values())
-    rows.sort(key=lambda x: (x["blocked"] == False, -x["total"], x["group_name"], x["group_jid"]))
+    rows.sort(key=lambda x: (x["blocked"], -x["total"], x["group_name"], x["group_jid"]))
     return rows
+
+def _panel_load_today_rows():
+    return _panel_load_rows_for_days([_panel_day_str()])
+
+def _panel_load_week_rows():
+    start = _panel_week_start()
+    end = _panel_week_end()
+    days = _daterange_days(start, end)
+    return _panel_load_rows_for_days(days)
 
 def _panel_summary(rows):
     return {
         "day": _panel_day_str(),
-        "groups": len(rows),
+        "groups": sum(1 for r in rows if _safe_int(r.get("total")) > 0),
         "total": sum(r["total"] for r in rows),
         "ok_rfc_idcif_qr": sum(r["ok_rfc_idcif_qr"] for r in rows),
         "ok_rfc_clon": sum(r["ok_rfc_clon"] for r in rows),
@@ -873,10 +907,19 @@ def evolution_webhook():
 
 @app.get("/panel/api/stats")
 def panel_api_stats():
-    rows = _panel_load_today_rows()
+    view = _safe(request.args.get("view")).lower()
+
+    if view == "week":
+        rows = _panel_load_week_rows()
+        period = "week"
+    else:
+        rows = _panel_load_today_rows()
+        period = "day"
+
     summary = _panel_summary(rows)
     return jsonify({
         "ok": True,
+        "view": period,
         "summary": summary,
         "rows": rows,
     }), 200
@@ -885,10 +928,15 @@ def panel_api_stats():
 def panel_block_group():
     try:
         group_jid = _safe(request.form.get("group_jid"))
+        view = _safe(request.form.get("view")).lower()
+
         if not group_jid:
             return "group_jid requerido", 400
 
         block_group(group_jid)
+
+        if view == "week":
+            return redirect("/panel?view=week")
         return redirect("/panel")
     except Exception as e:
         print("panel_block_group error:", repr(e), flush=True)
@@ -899,10 +947,15 @@ def panel_block_group():
 def panel_unblock_group():
     try:
         group_jid = _safe(request.form.get("group_jid"))
+        view = _safe(request.form.get("view")).lower()
+
         if not group_jid:
             return "group_jid requerido", 400
 
         unblock_group(group_jid)
+
+        if view == "week":
+            return redirect("/panel?view=week")
         return redirect("/panel")
     except Exception as e:
         print("panel_unblock_group error:", repr(e), flush=True)
@@ -911,7 +964,23 @@ def panel_unblock_group():
 
 @app.get("/panel")
 def panel_stats():
-    rows = _panel_load_today_rows()
+    view = _safe(request.args.get("view")).lower()
+
+    if view == "week":
+        rows = _panel_load_week_rows()
+        title_period = "Semana actual"
+        week_start = _panel_week_start().strftime("%Y-%m-%d")
+        week_end = _panel_week_end().strftime("%Y-%m-%d")
+        subtitle = f"Corte semanal: {week_start} a {week_end} ({PANEL_TZ})"
+        auto_reload = "false"
+        section_note = "Vista semanal"
+    else:
+        rows = _panel_load_today_rows()
+        title_period = "Hoy"
+        subtitle = f"Corte diario automático: {_panel_day_str()} (reinicio lógico a las 00:00:00, {PANEL_TZ})"
+        auto_reload = "true"
+        section_note = "Actualización automática cada 30 segundos"
+
     summary = _panel_summary(rows)
 
     def esc(v):
@@ -1216,6 +1285,34 @@ def panel_stats():
     .btn:hover {{
       opacity: .92;
     }}
+
+    .toolbar {{
+      margin-top: 14px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      position: relative;
+      z-index: 1;
+    }}
+    
+    .tool-link {{
+      text-decoration: none;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.14);
+      color: white;
+      font-weight: 700;
+      border: 1px solid rgba(255,255,255,.18);
+    }}
+    
+    .tool-link:hover {{
+      background: rgba(255,255,255,.22);
+    }}
+    
+    .tool-link-active {{
+      background: white;
+      color: #0f172a;
+    }}
     
     @media (max-width: 720px) {{
       .btn {{
@@ -1334,7 +1431,9 @@ def panel_stats():
     }}
   </style>
   <script>
-    setTimeout(() => location.reload(), 30000);
+    if ({auto_reload}) {{
+      setTimeout(() => location.reload(), 30000);
+    }}
   </script>
 </head>
 <body>
@@ -1342,13 +1441,17 @@ def panel_stats():
     <section class="hero">
       <h1>Panel puente WA</h1>
       <p class="sub">
-        Corte diario automático: {summary["day"]} (reinicio lógico a las 00:00:00, {PANEL_TZ})
+        {subtitle}
       </p>
+      <div class="toolbar">
+        <a href="/panel" class="tool-link {'tool-link-active' if view != 'week' else ''}">Hoy</a>
+        <a href="/panel?view=week" class="tool-link {'tool-link-active' if view == 'week' else ''}">Semana actual</a>
+      </div>
     </section>
 
     <section class="cards">
       <div class="card">
-        <div class="label">Total exitosos hoy</div>
+        <div class="label">Total exitosos {title_period.lower()}</div>
         <div class="value">{summary["total"]}</div>
       </div>
       <div class="card">
@@ -1376,7 +1479,7 @@ def panel_stats():
     <section class="section">
       <div class="section-head">
         <h2 class="section-title">Actividad por grupo</h2>
-        <div class="section-note">Actualización automática cada 30 segundos</div>
+        <div class="section-note">{section_note}</div>
       </div>
 
       <div class="table-wrap">
@@ -1410,6 +1513,7 @@ def panel_stats():
                 action_html = f"""
                 <form class="action-form" method="post" action="/panel/unblock-group">
                   <input type="hidden" name="group_jid" value="{esc(r["group_jid"])}">
+                  <input type="hidden" name="view" value="{esc(view)}">
                   <button class="btn btn-unblock" type="submit">Desbloquear</button>
                 </form>
                 """
@@ -1417,6 +1521,7 @@ def panel_stats():
                 action_html = f"""
                 <form class="action-form" method="post" action="/panel/block-group">
                   <input type="hidden" name="group_jid" value="{esc(r["group_jid"])}">
+                  <input type="hidden" name="view" value="{esc(view)}">
                   <button class="btn btn-block" type="submit">Bloquear</button>
                 </form>
                 """
@@ -1440,7 +1545,7 @@ def panel_stats():
     else:
         html += """
             <tr>
-              <td colspan="9" class="empty">Sin actividad hoy.</td>
+              <td colspan="9" class="empty">Sin actividad en este periodo.</td>
             </tr>
         """
 
