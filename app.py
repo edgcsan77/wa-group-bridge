@@ -64,6 +64,7 @@ GROUP_NAME_MAP = {
     "120363404313875699@g.us": "MAX 4",
     "120363424117651122@g.us": "MAX 5",
     "120363425605880699@g.us": "MAX 6",
+    "120363410011580719@g.us": "RODOLFO",
 }
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
