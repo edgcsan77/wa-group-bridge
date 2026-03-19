@@ -187,7 +187,7 @@ def _is_text_candidate(text: str) -> bool:
     normalized = _normalize_upper(raw)
 
     # Limpiar etiquetas conocidas del texto completo
-    normalized_clean = re.sub(r"\b(RFC|IDCIF|CURP)\s*:\s*", "", normalized, flags=re.IGNORECASE)
+    normalized_clean = re.sub(r"\b(RFC|IDCIF|CURP)\s*:?\s+", "", normalized, flags=re.IGNORECASE)
 
     raw_lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
     raw_lines = [line for line in raw_lines if line]
@@ -280,7 +280,7 @@ def _strip_known_prefix(line: str) -> str:
 
 def _extract_embedded_tokens(text: str):
     s = _normalize_upper(text)
-    s = re.sub(r"\b(RFC|IDCIF|CURP)\s*:\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\b(RFC|IDCIF|CURP)\s*:?\s+", "", s, flags=re.IGNORECASE)
 
     curp_pattern = r"\b[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d\b"
     rfc_pattern = r"\b[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}\b"
@@ -381,7 +381,7 @@ def _parse_command(text: str):
         }
 
     # RFC + lugar
-    if re.search(rf"\b{rfc_pattern}\b", upper_raw_clean) and not re.search(rf"\b{idcif_pattern}\b", upper_raw_clean) and re.search(lugar_pattern, upper_raw):
+    if re.search(rf"\b{rfc_pattern}\b", upper_raw_clean) and not re.search(rf"\b{idcif_pattern}\b", upper_raw_clean) and re.search(lugar_pattern, upper_raw_clean):
         return {
             "ok": True,
             "type": "rfc_lugar",
@@ -394,7 +394,7 @@ def _parse_command(text: str):
     idcif_match = re.search(rf"\b({idcif_pattern})\b", upper_raw_clean)
 
     if rfc_match and idcif_match:
-        if re.search(lugar_pattern, upper_raw):
+        if re.search(lugar_pattern, upper_raw_clean):
             return {
                 "ok": True,
                 "type": "rfc_idcif_lugar",
@@ -482,6 +482,52 @@ def _parse_command(text: str):
                         )
                     }
 
+    # -------------------------------------------------
+    # 2-A PRE) TEXTO CORRIDO CON PREFIJOS EXPLÍCITOS
+    # -------------------------------------------------
+    m_curp = re.search(r"\bCURP\s*:?\s*([A-Z0-9]{10,25})\b", upper_raw, flags=re.IGNORECASE)
+    if m_curp:
+        curp_candidate = _normalize_upper(m_curp.group(1))
+        if not re.fullmatch(curp_pattern, curp_candidate):
+            return {
+                "ok": False,
+                "type": "invalid_curp",
+                "query": None,
+                "error": (
+                    "⚠️ CURP inválida.\n"
+                    "Debe tener 18 caracteres con formato correcto.\n"
+                )
+            }
+
+    m_rfc = re.search(r"\bRFC\s*:?\s*([A-ZÑ&0-9]{8,20})\b", upper_raw, flags=re.IGNORECASE)
+    if m_rfc:
+        rfc_candidate = _normalize_upper(m_rfc.group(1))
+        if not re.fullmatch(rfc_pattern, rfc_candidate):
+            return {
+                "ok": False,
+                "type": "invalid_rfc",
+                "query": None,
+                "error": (
+                    "⚠️ RFC inválido.\n"
+                    "Persona física: 13 caracteres.\n"
+                    "Persona moral: 12 caracteres.\n"
+                )
+            }
+
+    m_idcif = re.search(r"\bIDCIF\s*:?\s*([A-Z0-9]{8,20})\b", upper_raw, flags=re.IGNORECASE)
+    if m_idcif:
+        idcif_candidate = _normalize_upper(m_idcif.group(1))
+        if not re.fullmatch(idcif_pattern, idcif_candidate):
+            return {
+                "ok": False,
+                "type": "invalid_idcif",
+                "query": None,
+                "error": (
+                    "⚠️ IDCIF inválido.\n"
+                    "Debe contener únicamente 11 dígitos.\n"
+                )
+            }
+    
     # -------------------------------------------------
     # 2-A EXTRA) TEXTO CORRIDO PRO: RFC/IDCIF aunque estén mal
     # -------------------------------------------------
