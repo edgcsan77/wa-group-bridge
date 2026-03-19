@@ -164,22 +164,34 @@ def _looks_like_rfc(value: str) -> bool:
     return True
 
 def _looks_like_idcif(value: str) -> bool:
-    v = re.sub(r"\s+", "", value or "")
+    v = re.sub(r"\s+", "", _normalize_upper(value))
     if not v:
         return False
-    return bool(re.fullmatch(r"\d{8,14}", v))
+
+    # IDCIF normalmente ronda 11 dígitos, pero aquí aceptamos "casi IDCIF"
+    if len(v) < 8 or len(v) > 14:
+        return False
+
+    # Si tiene mayoría numérica o mezcla rara cercana a numérico, tratarlo como posible IDCIF
+    digits = sum(ch.isdigit() for ch in v)
+    if digits >= max(6, len(v) - 2):
+        return True
+
+    return False
 
 def _is_text_candidate(text: str) -> bool:
-    """
-    Decide si el texto parece realmente una consulta para el bot
-    o solo conversación normal del grupo.
-    """
     raw = _safe(text)
     if not raw:
         return False
 
     normalized = _normalize_upper(raw)
-    lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
+
+    # Limpiar etiquetas conocidas del texto completo
+    normalized_clean = re.sub(r"\b(RFC|IDCIF|CURP)\s*:\s*", "", normalized, flags=re.IGNORECASE)
+
+    raw_lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
+    raw_lines = [line for line in raw_lines if line]
+    lines = [_strip_known_prefix(line) for line in raw_lines]
     lines = [line for line in lines if line]
 
     curp_pattern = r"^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$"
@@ -188,13 +200,11 @@ def _is_text_candidate(text: str) -> bool:
     lugar_pattern = r"^[A-ZÁÉÍÓÚÜÑ\s]+,\s*[A-ZÁÉÍÓÚÜÑ\s]+$"
 
     # Exactos válidos
-    if re.fullmatch(curp_pattern, normalized):
+    if re.fullmatch(curp_pattern, normalized_clean):
         return True
-    if re.fullmatch(rfc_pattern, normalized):
+    if re.fullmatch(rfc_pattern, normalized_clean):
         return True
-    if re.fullmatch(idcif_pattern, normalized):
-        return True
-    if re.fullmatch(lugar_pattern, normalized):
+    if re.fullmatch(idcif_pattern, normalized_clean):
         return True
 
     # Por línea
@@ -213,7 +223,6 @@ def _is_text_candidate(text: str) -> bool:
             strong_hits += 1
             continue
 
-        # Parecidos fuertes
         if _looks_like_rfc(line):
             strong_hits += 1
             continue
@@ -224,18 +233,14 @@ def _is_text_candidate(text: str) -> bool:
             strong_hits += 1
             continue
 
-    # Si hay al menos una línea muy sospechosa, sí procesar
     if strong_hits >= 1:
         return True
 
-    # Texto corrido con RFC + IDCIF o CURP + lugar
-    if re.search(r"[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}", normalized) and re.search(r"\b\d{11}\b", normalized):
+    # Texto corrido "pro"
+    if re.search(r"[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}", normalized_clean) and re.search(r"\b\d{8,14}\b", normalized_clean):
         return True
 
-    if re.search(r"[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d", normalized) and "," in normalized:
-        return True
-
-    if re.search(r"[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}", normalized) and "," in normalized:
+    if re.search(r"[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d", normalized_clean):
         return True
 
     return False
@@ -264,6 +269,27 @@ def _looks_like_lugar(value: str) -> bool:
         return False
 
     return True
+
+def _strip_known_prefix(line: str) -> str:
+    s = _normalize_upper(line)
+    s = re.sub(r"^(RFC|IDCIF|CURP)\s*:\s*", "", s, flags=re.IGNORECASE).strip()
+    return s
+
+def _extract_embedded_tokens(text: str):
+    s = _normalize_upper(text)
+    s = re.sub(r"\b(RFC|IDCIF|CURP)\s*:\s*", "", s, flags=re.IGNORECASE)
+
+    curp_pattern = r"\b[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d\b"
+    rfc_pattern = r"\b[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}\b"
+    idcif_pattern = r"\b\d{11}\b"
+    lugar_pattern = r"\b[A-ZÁÉÍÓÚÜÑ\s]+,\s*[A-ZÁÉÍÓÚÜÑ\s]+\b"
+
+    return {
+        "curp": re.findall(curp_pattern, s),
+        "rfc": re.findall(rfc_pattern, s),
+        "idcif": re.findall(idcif_pattern, s),
+        "lugar": re.findall(lugar_pattern, s),
+    }
 
 def _parse_command(text: str):
     t = _safe(text)
@@ -300,7 +326,8 @@ def _parse_command(text: str):
         }
 
     upper_raw = _normalize_upper(raw)
-    flat = re.sub(r"[ \t]+", " ", upper_raw).strip()
+    upper_raw_clean = re.sub(r"\b(RFC|IDCIF|CURP)\s*:\s*", "", upper_raw, flags=re.IGNORECASE)
+    flat = re.sub(r"[ \t]+", " ", upper_raw_clean).strip()
 
     # patrones
     curp_pattern = r"[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d"
@@ -308,7 +335,10 @@ def _parse_command(text: str):
     idcif_pattern = r"\d{11}"
     lugar_pattern = r"[A-ZÁÉÍÓÚÜÑ\s]+,\s*[A-ZÁÉÍÓÚÜÑ\s]+"
 
-    lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
+    raw_lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
+    raw_lines = [line for line in raw_lines if line]
+    
+    lines = [_strip_known_prefix(line) for line in raw_lines]
     lines = [line for line in lines if line]
 
     # -------------------------------------------------
@@ -339,7 +369,7 @@ def _parse_command(text: str):
         }
 
     # CURP + lugar
-    if re.search(rf"\b{curp_pattern}\b", upper_raw) and re.search(lugar_pattern, upper_raw):
+    if re.search(rf"\b{curp_pattern}\b", upper_raw_clean) and re.search(lugar_pattern, upper_raw_clean):
         return {
             "ok": True,
             "type": "curp_lugar",
@@ -348,7 +378,7 @@ def _parse_command(text: str):
         }
 
     # RFC + lugar
-    if re.search(rf"\b{rfc_pattern}\b", upper_raw) and not re.search(rf"\b{idcif_pattern}\b", upper_raw) and re.search(lugar_pattern, upper_raw):
+    if re.search(rf"\b{rfc_pattern}\b", upper_raw_clean) and not re.search(rf"\b{idcif_pattern}\b", upper_raw_clean) and re.search(lugar_pattern, upper_raw):
         return {
             "ok": True,
             "type": "rfc_lugar",
@@ -357,8 +387,8 @@ def _parse_command(text: str):
         }
 
     # RFC + IDCIF
-    rfc_match = re.search(rf"\b({rfc_pattern})\b", upper_raw)
-    idcif_match = re.search(rf"\b({idcif_pattern})\b", upper_raw)
+    rfc_match = re.search(rf"\b({rfc_pattern})\b", upper_raw_clean)
+    idcif_match = re.search(rf"\b({idcif_pattern})\b", upper_raw_clean)
 
     if rfc_match and idcif_match:
         if re.search(lugar_pattern, upper_raw):
@@ -434,19 +464,20 @@ def _parse_command(text: str):
         first_line = lines[0]
         second_line = lines[1]
 
-        # Si la primera línea es RFC válido y la segunda no es lugar
-        if re.fullmatch(rfc_pattern, first_line) and not re.fullmatch(lugar_pattern, second_line):
-            # Si la segunda línea no es IDCIF válido, tratarla como IDCIF inválido
-            if not re.fullmatch(idcif_pattern, second_line):
-                return {
-                    "ok": False,
-                    "type": "invalid_idcif",
-                    "query": None,
-                    "error": (
-                        "⚠️ IDCIF inválido.\n"
-                        "Debe contener únicamente 11 dígitos.\n"
-                    )
-                }
+        if re.fullmatch(rfc_pattern, first_line):
+            # Si la segunda no es lugar y además parece un IDCIF o algo cercano,
+            # tratarla como error de IDCIF
+            if not re.fullmatch(lugar_pattern, second_line):
+                if _looks_like_idcif(second_line) and not re.fullmatch(idcif_pattern, second_line):
+                    return {
+                        "ok": False,
+                        "type": "invalid_idcif",
+                        "query": None,
+                        "error": (
+                            "⚠️ IDCIF inválido.\n"
+                            "Debe contener únicamente 11 dígitos.\n"
+                        )
+                    }
 
     # -------------------------------------------------
     # 2) INVÁLIDOS ESPECÍFICOS POR LÍNEA
@@ -507,6 +538,44 @@ def _parse_command(text: str):
                     "Debes escribir municipio y entidad separados por coma.\n"
                 )
             }
+
+    # -------------------------------------------------
+    # 2-B) DETECCIÓN PRO DE TOKENS INCRUSTADOS
+    # -------------------------------------------------
+    embedded = _extract_embedded_tokens(raw)
+
+    if embedded["rfc"] and embedded["idcif"]:
+        rfc = embedded["rfc"][0]
+        idcif = embedded["idcif"][0]
+        if embedded["lugar"]:
+            return {
+                "ok": True,
+                "type": "rfc_idcif_lugar",
+                "query": f"RFC: {rfc}\nIDCIF: {idcif}\n{embedded['lugar'][0]}",
+                "error": None
+            }
+        return {
+            "ok": True,
+            "type": "rfc_idcif",
+            "query": f"RFC: {rfc}\nIDCIF: {idcif}",
+            "error": None
+        }
+
+    if embedded["curp"] and embedded["lugar"]:
+        return {
+            "ok": True,
+            "type": "curp_lugar",
+            "query": f"{embedded['curp'][0]}\n{embedded['lugar'][0]}",
+            "error": None
+        }
+
+    if embedded["rfc"] and embedded["lugar"]:
+        return {
+            "ok": True,
+            "type": "rfc_lugar",
+            "query": f"{embedded['rfc'][0]}\n{embedded['lugar'][0]}",
+            "error": None
+        }
 
     # -------------------------------------------------
     # 3) ERROR GENÉRICO
