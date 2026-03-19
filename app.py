@@ -168,12 +168,12 @@ def _looks_like_idcif(value: str) -> bool:
     if not v:
         return False
 
-    # IDCIF normalmente ronda 11 dígitos, pero aquí aceptamos "casi IDCIF"
     if len(v) < 8 or len(v) > 14:
         return False
 
-    # Si tiene mayoría numérica o mezcla rara cercana a numérico, tratarlo como posible IDCIF
     digits = sum(ch.isdigit() for ch in v)
+
+    # si casi todo son dígitos, tratarlo como IDCIF sospechoso
     if digits >= max(6, len(v) - 2):
         return True
 
@@ -272,7 +272,10 @@ def _looks_like_lugar(value: str) -> bool:
 
 def _strip_known_prefix(line: str) -> str:
     s = _normalize_upper(line)
-    s = re.sub(r"^(RFC|IDCIF|CURP)\s*:\s*", "", s, flags=re.IGNORECASE).strip()
+
+    # Quita prefijos al inicio con o sin :
+    s = re.sub(r"^(RFC|IDCIF|CURP)\s*:?\s+", "", s, flags=re.IGNORECASE).strip()
+
     return s
 
 def _extract_embedded_tokens(text: str):
@@ -326,7 +329,7 @@ def _parse_command(text: str):
         }
 
     upper_raw = _normalize_upper(raw)
-    upper_raw_clean = re.sub(r"\b(RFC|IDCIF|CURP)\s*:\s*", "", upper_raw, flags=re.IGNORECASE)
+    upper_raw_clean = re.sub(r"\b(RFC|IDCIF|CURP)\s*:?\s+", "", upper_raw, flags=re.IGNORECASE)
     flat = re.sub(r"[ \t]+", " ", upper_raw_clean).strip()
 
     # patrones
@@ -478,6 +481,67 @@ def _parse_command(text: str):
                             "Debe contener únicamente 11 dígitos.\n"
                         )
                     }
+
+    # -------------------------------------------------
+    # 2-A EXTRA) TEXTO CORRIDO PRO: RFC/IDCIF aunque estén mal
+    # -------------------------------------------------
+    compact_tokens = re.findall(r"[A-Z0-9Ñ&]+", upper_raw_clean)
+
+    maybe_rfc = None
+    maybe_idcif = None
+    maybe_curp = None
+
+    for tok in compact_tokens:
+        if _looks_like_rfc(tok):
+            maybe_rfc = tok
+            break
+
+    for tok in compact_tokens:
+        if _looks_like_idcif(tok):
+            maybe_idcif = tok
+            break
+
+    for tok in compact_tokens:
+        if _looks_like_curp(tok):
+            maybe_curp = tok
+            break
+
+    # CURP sospechosa en texto corrido
+    if maybe_curp and not re.fullmatch(curp_pattern, maybe_curp):
+        return {
+            "ok": False,
+            "type": "invalid_curp",
+            "query": None,
+            "error": (
+                "⚠️ CURP inválida.\n"
+                "Debe tener 18 caracteres con formato correcto.\n"
+            )
+        }
+
+    # RFC sospechoso + posible IDCIF
+    if maybe_rfc and not re.fullmatch(rfc_pattern, maybe_rfc):
+        return {
+            "ok": False,
+            "type": "invalid_rfc",
+            "query": None,
+            "error": (
+                "⚠️ RFC inválido.\n"
+                "Persona física: 13 caracteres.\n"
+                "Persona moral: 12 caracteres.\n"
+            )
+        }
+
+    # RFC válido + IDCIF sospechoso inválido
+    if maybe_rfc and re.fullmatch(rfc_pattern, maybe_rfc) and maybe_idcif and not re.fullmatch(idcif_pattern, maybe_idcif):
+        return {
+            "ok": False,
+            "type": "invalid_idcif",
+            "query": None,
+            "error": (
+                "⚠️ IDCIF inválido.\n"
+                "Debe contener únicamente 11 dígitos.\n"
+            )
+        }
 
     # -------------------------------------------------
     # 2) INVÁLIDOS ESPECÍFICOS POR LÍNEA
