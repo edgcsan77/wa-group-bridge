@@ -278,6 +278,17 @@ def _strip_known_prefix(line: str) -> str:
 
     return s
 
+def _expand_labeled_segments(text: str):
+    s = _normalize_upper(text)
+    if not s:
+        return []
+
+    # Inserta salto antes de cada etiqueta conocida, excepto si ya está al inicio
+    s = re.sub(r"\s+(RFC|IDCIF|CURP)\s*:?\s*", r"\n\1: ", s, flags=re.IGNORECASE)
+
+    parts = [p.strip() for p in s.splitlines() if p.strip()]
+    return parts
+
 def _extract_embedded_tokens(text: str):
     s = _normalize_upper(text)
     s = re.sub(r"\b(RFC|IDCIF|CURP)\s*:?\s+", "", s, flags=re.IGNORECASE)
@@ -339,6 +350,18 @@ def _parse_command(text: str):
     lugar_pattern = r"[A-ZÁÉÍÓÚÜÑ\s]+,\s*[A-ZÁÉÍÓÚÜÑ\s]+"
 
     raw_lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
+    raw_lines = [line for line in raw_lines if line]
+    
+    # Expandir etiquetas internas en una misma línea
+    expanded_lines = []
+    for line in raw_lines:
+        expanded = _expand_labeled_segments(line)
+        if expanded:
+            expanded_lines.extend(expanded)
+        else:
+            expanded_lines.append(line)
+    
+    raw_lines = expanded_lines
     raw_lines = [line for line in raw_lines if line]
     
     lines = [_strip_known_prefix(line) for line in raw_lines]
