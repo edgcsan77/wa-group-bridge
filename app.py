@@ -142,8 +142,14 @@ def _looks_like_curp(value: str) -> bool:
     if len(v) < 16 or len(v) > 20:
         return False
 
-    if not re.match(r"^[A-Z]{4}\d{6}", v):
+    if not re.match(r"^[A-Z0-9]{4}", v):
         return False
+
+    if len(v) >= 10:
+        fecha = v[4:10]
+        digits_like = sum(ch.isdigit() or ch in "OISBZ" for ch in fecha)
+        if digits_like < 5:
+            return False
 
     return bool(re.fullmatch(r"[A-Z0-9]{16,20}", v))
 
@@ -155,10 +161,18 @@ def _looks_like_rfc(value: str) -> bool:
     if len(v) < 11 or len(v) > 14:
         return False
 
-    if not re.match(r"^[A-ZÑ&]{3,4}", v):
+    # inicio tipo letras
+    if not re.match(r"^[A-ZÑ&0-9]{3,4}", v):
         return False
 
-    if not re.search(r"\d{5,}", v):
+    # bloque fecha "parecido" a 6 caracteres casi numéricos
+    body = v[3:] if len(v) == 12 else v[4:]
+    if len(body) < 6:
+        return False
+
+    fecha = body[:6]
+    digits_like = sum(ch.isdigit() or ch in "OISBZ" for ch in fecha)
+    if digits_like < 5:
         return False
 
     return True
