@@ -185,19 +185,28 @@ def _is_text_candidate(text: str) -> bool:
         return False
 
     normalized = _normalize_upper(raw)
-
-    # Limpiar etiquetas conocidas del texto completo
     normalized_clean = re.sub(r"\b(RFC|IDCIF|CURP)\s*:?\s+", "", normalized, flags=re.IGNORECASE)
 
-    raw_lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
-    raw_lines = [line for line in raw_lines if line]
+    # Primero separar líneas reales
+    base_lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
+    base_lines = [line for line in base_lines if line]
+
+    # Luego expandir etiquetas internas en una misma línea
+    expanded_lines = []
+    for line in base_lines or [normalized]:
+        expanded = _expand_labeled_segments(line)
+        if expanded:
+            expanded_lines.extend(expanded)
+        else:
+            expanded_lines.append(line)
+
+    raw_lines = [line for line in expanded_lines if line]
     lines = [_strip_known_prefix(line) for line in raw_lines]
     lines = [line for line in lines if line]
 
     curp_pattern = r"^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$"
     rfc_pattern = r"^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$"
     idcif_pattern = r"^\d{11}$"
-    lugar_pattern = r"^[A-ZÁÉÍÓÚÜÑ\s]+,\s*[A-ZÁÉÍÓÚÜÑ\s]+$"
 
     # Exactos válidos
     if re.fullmatch(curp_pattern, normalized_clean):
@@ -207,7 +216,19 @@ def _is_text_candidate(text: str) -> bool:
     if re.fullmatch(idcif_pattern, normalized_clean):
         return True
 
-    # Por línea
+    # Caso fuerte: dos tokens en una misma línea, tipo RFC + algo parecido a IDCIF
+    compact_tokens = re.findall(r"[A-Z0-9Ñ&]+", normalized_clean)
+    if len(compact_tokens) >= 2:
+        first = compact_tokens[0]
+        second = compact_tokens[1]
+
+        if (_looks_like_rfc(first) or re.fullmatch(rfc_pattern, first)) and _looks_like_idcif(second):
+            return True
+
+        if (_looks_like_curp(first) or re.fullmatch(curp_pattern, first)):
+            return True
+
+    # Por línea / pseudo-líneas
     strong_hits = 0
     for line in lines:
         if re.fullmatch(curp_pattern, line):
@@ -217,9 +238,6 @@ def _is_text_candidate(text: str) -> bool:
             strong_hits += 1
             continue
         if re.fullmatch(idcif_pattern, line):
-            strong_hits += 1
-            continue
-        if re.fullmatch(lugar_pattern, line):
             strong_hits += 1
             continue
 
@@ -236,11 +254,14 @@ def _is_text_candidate(text: str) -> bool:
     if strong_hits >= 1:
         return True
 
-    # Texto corrido "pro"
-    if re.search(r"[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}", normalized_clean) and re.search(r"\b\d{8,14}\b", normalized_clean):
+    # Texto corrido
+    if re.search(r"[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}", normalized_clean):
         return True
 
     if re.search(r"[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d", normalized_clean):
+        return True
+
+    if re.search(r"\d{8,14}", normalized_clean):
         return True
 
     return False
@@ -354,15 +375,14 @@ def _parse_command(text: str):
     
     # Expandir etiquetas internas en una misma línea
     expanded_lines = []
-    for line in raw_lines:
+    for line in raw_lines or [upper_raw]:
         expanded = _expand_labeled_segments(line)
         if expanded:
             expanded_lines.extend(expanded)
         else:
             expanded_lines.append(line)
     
-    raw_lines = expanded_lines
-    raw_lines = [line for line in raw_lines if line]
+    raw_lines = [line for line in expanded_lines if line]
     
     lines = [_strip_known_prefix(line) for line in raw_lines]
     lines = [line for line in lines if line]
