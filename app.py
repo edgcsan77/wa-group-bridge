@@ -1641,35 +1641,35 @@ def panel_cuts():
     th {{ background:#0f172a; color:white; }}
     .right {{ text-align:right; }}
     .total-row td {{ font-weight:700; background:#f8fafc; }}
-    .actions-cell {
+    .actions-cell {{
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
       align-items: center;
-    }
+    }}
     
-    .tool-link-solid {
+    .tool-link-solid {{
       background: #2563eb !important;
       color: #fff !important;
       border: none !important;
-    }
+    }}
     
-    .inline-form {
+    .inline-form {{
       margin: 0;
-    }
+    }}
     
-    @media (max-width: 900px) {
-      .actions-cell {
+    @media (max-width: 900px) {{
+      .actions-cell {{
         flex-direction: column;
         align-items: stretch;
-      }
+      }}
     
       .actions-cell .tool-link,
-      .actions-cell .btn {
+      .actions-cell .btn {{
         width: 100%;
         text-align: center;
-      }
-    }
+      }}
+    }}
   </style>
 </head>
 <body>
