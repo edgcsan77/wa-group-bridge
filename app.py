@@ -1559,6 +1559,12 @@ def panel_send_daily_cuts():
         traceback.print_exc()
         return "error enviando cortes", 500
 
+@app.get("/cron/reset")
+def reset_cron():
+    key = f"cron_sent_daily_cuts:{_panel_day_str()}"
+    redis_conn.delete(key)
+    return {"ok": True, "deleted": key}
+
 @app.post("/cron/send-daily-cuts")
 def cron_send_daily_cuts():
     try:
@@ -1569,14 +1575,21 @@ def cron_send_daily_cuts():
         day_str = _safe(request.args.get("day")) or _panel_day_str()
 
         lock_key = f"cron_sent_daily_cuts:{day_str}"
-        if not redis_conn.set(lock_key, "1", ex=60 * 60 * 6, nx=True):
+
+        if redis_conn.get(lock_key):
             return jsonify({
                 "ok": True,
                 "skipped": "already_sent",
                 "day": day_str,
             }), 200
-
+        
         result = send_daily_cuts(day_str=day_str)
+        
+        sent = result.get("sent") or []
+        
+        if sent:
+            redis_conn.set(lock_key, "1", ex=60 * 60 * 24)
+
         return jsonify(result), 200
 
     except Exception as e:
