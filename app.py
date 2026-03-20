@@ -1767,10 +1767,45 @@ def panel_cuts():
     }}
     .btn-green {{ background:#16a34a; }}
     .inline-form {{ margin:0; display:inline-block; }}
+
+    .actions-cell {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }}
+
+    .tool-link-solid {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 88px;
+      padding: 9px 12px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 700;
+      box-sizing: border-box;
+      background: #2563eb !important;
+      color: #fff !important;
+      border: none !important;
+    }}
+
     @media (max-width: 900px) {{
       .cards {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
       .table-wrap {{ overflow-x:auto; }}
+
+      .actions-cell {{
+        flex-direction: column;
+        align-items: stretch;
+      }}
+
+      .actions-cell .tool-link-solid,
+      .actions-cell .btn {{
+        width: 100%;
+        text-align: center;
+      }}
     }}
+
     @media (max-width: 520px) {{
       .cards {{ grid-template-columns:1fr; }}
     }}
