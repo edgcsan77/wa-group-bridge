@@ -1641,6 +1641,35 @@ def panel_cuts():
     th {{ background:#0f172a; color:white; }}
     .right {{ text-align:right; }}
     .total-row td {{ font-weight:700; background:#f8fafc; }}
+    .actions-cell {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    
+    .tool-link-solid {
+      background: #2563eb !important;
+      color: #fff !important;
+      border: none !important;
+    }
+    
+    .inline-form {
+      margin: 0;
+    }
+    
+    @media (max-width: 900px) {
+      .actions-cell {
+        flex-direction: column;
+        align-items: stretch;
+      }
+    
+      .actions-cell .tool-link,
+      .actions-cell .btn {
+        width: 100%;
+        text-align: center;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1721,7 +1750,7 @@ def panel_cuts():
     .toolbar {{ margin-top:12px; display:flex; gap:10px; flex-wrap:wrap; }}
     .tool-link {{ text-decoration:none; padding:10px 14px; border-radius:10px; background:rgba(255,255,255,.16); color:white; font-weight:700; }}
     .tool-link-active {{ background:white; color:#0f172a; }}
-    .cards {{ display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:16px; }}
+    .cards {{ display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; margin-bottom:16px; }}
     .card {{ background:white; border-radius:16px; padding:16px; box-shadow:0 8px 24px rgba(15,23,42,.08); }}
     .label {{ color:#64748b; font-size:.9rem; margin-bottom:8px; }}
     .value {{ font-size:1.8rem; font-weight:800; }}
@@ -1778,6 +1807,10 @@ def panel_cuts():
         <div class="value">${esc(_fmt_money(summary["subtotal_clon"]))}</div>
       </div>
       <div class="card">
+        <div class="label">$ idcif</div>
+        <div class="value">${esc(_fmt_money(summary["subtotal_idcif"]))}</div>
+      </div>
+      <div class="card">
         <div class="label">Total</div>
         <div class="value">${esc(_fmt_money(summary["total"]))}</div>
       </div>
@@ -1820,8 +1853,10 @@ def panel_cuts():
               <td class="right">${esc(_fmt_money(r["subtotal_idcif"]))}</td>
               <td class="right">${esc(_fmt_money(r["total"]))}</td>
               <td>
-                <a class="tool-link" style="background:#2563eb; color:#fff; border:none;" href="/panel/cuts?view={esc(view)}&group_jid={esc(r["group_jid"])}">Detalle</a>
-                {"<form class='inline-form' method='post' action='/panel/send-daily-cut-group' style='margin-left:8px;'><input type='hidden' name='group_jid' value='" + esc(r["group_jid"]) + "'><input type='hidden' name='day' value='" + esc(_panel_day_str()) + "'><button class='btn btn-green' type='submit'>Enviar</button></form>" if view == "day" else ""}
+                <div class="actions-cell">
+                  <a class="tool-link tool-link-solid" href="/panel/cuts?view={esc(view)}&group_jid={esc(r["group_jid"])}">Detalle</a>
+                  {"<form class='inline-form' method='post' action='/panel/send-daily-cut-group'><input type='hidden' name='group_jid' value='" + esc(r["group_jid"]) + "'><input type='hidden' name='day' value='" + esc(_panel_day_str()) + "'><button class='btn btn-green' type='submit'>Enviar</button></form>" if view == "day" else ""}
+                </div>
               </td>
             </tr>
             """
