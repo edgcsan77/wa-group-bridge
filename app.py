@@ -75,6 +75,26 @@ redis_conn = Redis.from_url(REDIS_URL)
 task_queue = Queue("constancia_jobs", connection=redis_conn)
 
 # =========================
+# CORTES / PRECIOS / CRON
+# =========================
+PANEL_CRON_SECRET = os.getenv("PANEL_CRON_SECRET", "").strip()
+
+BENEFICIARIO_CORTE = "JUAN DE DIOS MESINO MANZANO"
+CLABE_CORTE = "63818001018336874"
+ENTIDAD_CORTE = "Nu México"
+
+# Precio por defecto si el grupo no está en el mapa
+DEFAULT_PRICES = {
+    "clon": 5.00,
+    "idcif": 5.00,
+}
+
+# PERSONALIZA AQUÍ LOS PRECIOS POR GRUPO
+GROUP_PRICES = {
+    "120363425323721713@g.us": {"clon": 5.00, "idcif": 5.00},   # PRUEBA
+}
+
+# =========================
 # BLOQUEO DE GRUPOS
 # =========================
 BLOCKED_GROUPS_KEY = "blocked_groups"
@@ -912,6 +932,289 @@ def _panel_summary(rows):
         "ok_rfc_only": sum(r["ok_rfc_only"] for r in rows),
     }
 
+# =========================
+# HELPERS DE CORTES
+# =========================
+
+MONTHS_ES = {
+    1: "ENERO",
+    2: "FEBRERO",
+    3: "MARZO",
+    4: "ABRIL",
+    5: "MAYO",
+    6: "JUNIO",
+    7: "JULIO",
+    8: "AGOSTO",
+    9: "SEPTIEMBRE",
+    10: "OCTUBRE",
+    11: "NOVIEMBRE",
+    12: "DICIEMBRE",
+}
+
+DAYS_ES = {
+    0: "LUNES",
+    1: "MARTES",
+    2: "MIÉRCOLES",
+    3: "JUEVES",
+    4: "VIERNES",
+    5: "SÁBADO",
+    6: "DOMINGO",
+}
+
+def _safe_float(v, default=0.0):
+    try:
+        return float(v or 0)
+    except Exception:
+        return default
+
+def _fmt_money(v: float) -> str:
+    try:
+        return f"{float(v):,.2f}"
+    except Exception:
+        return "0.00"
+
+def _period_day_label_es(day_str: str) -> str:
+    dt = datetime.strptime(day_str, "%Y-%m-%d")
+    return f"{dt.day:02d} {MONTHS_ES[dt.month]} {dt.year}"
+
+def _today_label_es() -> str:
+    now = _panel_now()
+    return f"{now.day:02d} {MONTHS_ES[now.month]} {now.year}"
+
+def _day_name_es(day_str: str) -> str:
+    dt = datetime.strptime(day_str, "%Y-%m-%d")
+    return DAYS_ES[dt.weekday()]
+
+def _get_group_prices(group_jid: str):
+    p = GROUP_PRICES.get(group_jid) or DEFAULT_PRICES
+    return {
+        "clon": _safe_float(p.get("clon"), DEFAULT_PRICES["clon"]),
+        "idcif": _safe_float(p.get("idcif"), DEFAULT_PRICES["idcif"]),
+    }
+
+def _cut_stats_key_for_day(day: str, group_jid: str) -> str:
+    return f"cut_stats:{day}:group:{group_jid}"
+
+def _period_days(view: str):
+    view = (view or "day").strip().lower()
+
+    if view == "week":
+        start = _panel_week_start()
+        end = _panel_week_end()
+        return _daterange_days(start, end)
+
+    return [_panel_day_str()]
+
+def _load_cut_rows_for_days(days):
+    rows_map = {}
+
+    for day in days:
+        prefix = f"cut_stats:{day}:group:"
+        for key in redis_conn.scan_iter(match=prefix + "*"):
+            key_s = _to_str(key)
+            raw = redis_conn.hgetall(key) or {}
+            raw = {_to_str(k): _to_str(v) for k, v in raw.items()}
+
+            group_jid = raw.get("group_jid") or key_s.split(":group:", 1)[-1]
+            group_name = GROUP_NAME_MAP.get(group_jid) or raw.get("group_name") or group_jid
+
+            count_clon = _safe_int(raw.get("count_clon"))
+            count_idcif = _safe_int(raw.get("count_idcif"))
+
+            prices = _get_group_prices(group_jid)
+            price_clon = prices["clon"]
+            price_idcif = prices["idcif"]
+
+            subtotal_clon = round(count_clon * price_clon, 2)
+            subtotal_idcif = round(count_idcif * price_idcif, 2)
+            total = round(subtotal_clon + subtotal_idcif, 2)
+
+            if group_jid not in rows_map:
+                rows_map[group_jid] = {
+                    "group_jid": group_jid,
+                    "group_name": group_name,
+                    "count_clon": 0,
+                    "count_idcif": 0,
+                    "subtotal_clon": 0.0,
+                    "subtotal_idcif": 0.0,
+                    "total": 0.0,
+                    "price_clon": price_clon,
+                    "price_idcif": price_idcif,
+                    "updated_at": "",
+                }
+
+            rows_map[group_jid]["count_clon"] += count_clon
+            rows_map[group_jid]["count_idcif"] += count_idcif
+            rows_map[group_jid]["subtotal_clon"] += subtotal_clon
+            rows_map[group_jid]["subtotal_idcif"] += subtotal_idcif
+            rows_map[group_jid]["total"] += total
+
+            updated_at = raw.get("updated_at") or ""
+            if updated_at and (not rows_map[group_jid]["updated_at"] or updated_at > rows_map[group_jid]["updated_at"]):
+                rows_map[group_jid]["updated_at"] = updated_at
+
+    rows = list(rows_map.values())
+    rows.sort(key=lambda x: (-x["total"], x["group_name"], x["group_jid"]))
+    return rows
+
+def _load_cut_detail_for_group(group_jid: str, days):
+    prices = _get_group_prices(group_jid)
+    group_name = GROUP_NAME_MAP.get(group_jid) or group_jid
+    detail = []
+
+    total_clon = 0
+    total_idcif = 0
+    total_sub_clon = 0.0
+    total_sub_idcif = 0.0
+    total_general = 0.0
+
+    for day in days:
+        raw = redis_conn.hgetall(_cut_stats_key_for_day(day, group_jid)) or {}
+        raw = {_to_str(k): _to_str(v) for k, v in raw.items()}
+
+        if raw.get("group_name"):
+            group_name = raw.get("group_name")
+
+        count_clon = _safe_int(raw.get("count_clon"))
+        count_idcif = _safe_int(raw.get("count_idcif"))
+
+        subtotal_clon = round(count_clon * prices["clon"], 2)
+        subtotal_idcif = round(count_idcif * prices["idcif"], 2)
+        total = round(subtotal_clon + subtotal_idcif, 2)
+
+        total_clon += count_clon
+        total_idcif += count_idcif
+        total_sub_clon += subtotal_clon
+        total_sub_idcif += subtotal_idcif
+        total_general += total
+
+        detail.append({
+            "date": day,
+            "day_name": _day_name_es(day),
+            "count_clon": count_clon,
+            "count_idcif": count_idcif,
+            "price_clon": prices["clon"],
+            "price_idcif": prices["idcif"],
+            "subtotal_clon": subtotal_clon,
+            "subtotal_idcif": subtotal_idcif,
+            "total": total,
+        })
+
+    return {
+        "group_jid": group_jid,
+        "group_name": group_name,
+        "price_clon": prices["clon"],
+        "price_idcif": prices["idcif"],
+        "rows": detail,
+        "totals": {
+            "count_clon": total_clon,
+            "count_idcif": total_idcif,
+            "subtotal_clon": round(total_sub_clon, 2),
+            "subtotal_idcif": round(total_sub_idcif, 2),
+            "total": round(total_general, 2),
+        }
+    }
+
+def _cut_summary(rows):
+    return {
+        "groups": sum(1 for r in rows if _safe_float(r.get("total")) > 0),
+        "count_clon": sum(_safe_int(r.get("count_clon")) for r in rows),
+        "count_idcif": sum(_safe_int(r.get("count_idcif")) for r in rows),
+        "subtotal_clon": round(sum(_safe_float(r.get("subtotal_clon")) for r in rows), 2),
+        "subtotal_idcif": round(sum(_safe_float(r.get("subtotal_idcif")) for r in rows), 2),
+        "total": round(sum(_safe_float(r.get("total")) for r in rows), 2),
+    }
+
+def _build_cut_message(group_name: str, date_label: str, count_clon: int, price_clon: float, subtotal_clon: float, count_idcif: int, price_idcif: float, subtotal_idcif: float, total: float) -> str:
+    return (
+        f"*{group_name}*\n"
+        f"*CORTE DE FECHA* {date_label}\n\n"
+        f"{count_clon} RFC clon x ${_fmt_money(price_clon)} = ${_fmt_money(subtotal_clon)}\n"
+        f"{count_idcif} RFC idcif x ${_fmt_money(price_idcif)} = ${_fmt_money(subtotal_idcif)}\n"
+        f"${_fmt_money(total)} pesos\n\n"
+        f"*Beneficiario:* {BENEFICIARIO_CORTE}\n"
+        f"*CLABE:* {CLABE_CORTE}\n"
+        f"*Entidad financiera:* {ENTIDAD_CORTE}\n\n"
+        f"*Favor de mandar comprobante*\n"
+        f"Agradecemos su preferencia"
+    )
+
+def send_daily_cut_for_group(group_jid: str, day_str: str = None):
+    day_str = (day_str or _panel_day_str()).strip()
+    rows = _load_cut_rows_for_days([day_str])
+
+    target = None
+    for r in rows:
+        if r["group_jid"] == group_jid:
+            target = r
+            break
+
+    if not target or _safe_float(target.get("total")) <= 0:
+        return {
+            "ok": False,
+            "error": "Sin actividad para ese grupo en esa fecha."
+        }
+
+    msg = _build_cut_message(
+        group_name=target["group_name"],
+        date_label=_period_day_label_es(day_str),
+        count_clon=_safe_int(target["count_clon"]),
+        price_clon=_safe_float(target["price_clon"]),
+        subtotal_clon=_safe_float(target["subtotal_clon"]),
+        count_idcif=_safe_int(target["count_idcif"]),
+        price_idcif=_safe_float(target["price_idcif"]),
+        subtotal_idcif=_safe_float(target["subtotal_idcif"]),
+        total=_safe_float(target["total"]),
+    )
+
+    evolution_send_text(group_jid=group_jid, text=msg)
+
+    return {
+        "ok": True,
+        "group_jid": group_jid,
+        "group_name": target["group_name"],
+        "day": day_str,
+        "total": _safe_float(target["total"]),
+    }
+
+def send_daily_cuts(day_str: str = None):
+    day_str = (day_str or _panel_day_str()).strip()
+    rows = _load_cut_rows_for_days([day_str])
+
+    sent = []
+    skipped = []
+
+    for r in rows:
+        if _safe_float(r.get("total")) <= 0:
+            skipped.append(r["group_jid"])
+            continue
+
+        msg = _build_cut_message(
+            group_name=r["group_name"],
+            date_label=_period_day_label_es(day_str),
+            count_clon=_safe_int(r["count_clon"]),
+            price_clon=_safe_float(r["price_clon"]),
+            subtotal_clon=_safe_float(r["subtotal_clon"]),
+            count_idcif=_safe_int(r["count_idcif"]),
+            price_idcif=_safe_float(r["price_idcif"]),
+            subtotal_idcif=_safe_float(r["subtotal_idcif"]),
+            total=_safe_float(r["total"]),
+        )
+
+        evolution_send_text(group_jid=r["group_jid"], text=msg)
+        sent.append({
+            "group_jid": r["group_jid"],
+            "group_name": r["group_name"],
+            "total": _safe_float(r["total"]),
+        })
+
+    return {
+        "ok": True,
+        "day": day_str,
+        "sent": sent,
+        "skipped": skipped,
+    }
+
 def _extract_evolution_message(payload: dict):
     data = payload.get("data") or payload
     key = data.get("key") or {}
@@ -1203,6 +1506,330 @@ def panel_unblock_group():
         print("panel_unblock_group error:", repr(e), flush=True)
         traceback.print_exc()
         return "error desbloqueando grupo", 500
+
+@app.get("/panel/api/cuts")
+def panel_api_cuts():
+    view = _safe(request.args.get("view")).lower() or "day"
+    group_jid = _safe(request.args.get("group_jid"))
+
+    days = _period_days(view)
+
+    if group_jid:
+        detail = _load_cut_detail_for_group(group_jid, days)
+        return jsonify({
+            "ok": True,
+            "view": view,
+            "detail": detail,
+        }), 200
+
+    rows = _load_cut_rows_for_days(days)
+    summary = _cut_summary(rows)
+
+    return jsonify({
+        "ok": True,
+        "view": view,
+        "summary": summary,
+        "rows": rows,
+    }), 200
+
+@app.post("/panel/send-daily-cut-group")
+def panel_send_daily_cut_group():
+    try:
+        group_jid = _safe(request.form.get("group_jid"))
+        day_str = _safe(request.form.get("day")) or _panel_day_str()
+
+        if not group_jid:
+            return "group_jid requerido", 400
+
+        send_daily_cut_for_group(group_jid=group_jid, day_str=day_str)
+        return redirect(f"/panel/cuts?view=day&day={day_str}")
+    except Exception as e:
+        print("panel_send_daily_cut_group error:", repr(e), flush=True)
+        traceback.print_exc()
+        return "error enviando corte del grupo", 500
+
+@app.post("/panel/send-daily-cuts")
+def panel_send_daily_cuts():
+    try:
+        day_str = _safe(request.form.get("day")) or _panel_day_str()
+        send_daily_cuts(day_str=day_str)
+        return redirect(f"/panel/cuts?view=day&day={day_str}")
+    except Exception as e:
+        print("panel_send_daily_cuts error:", repr(e), flush=True)
+        traceback.print_exc()
+        return "error enviando cortes", 500
+
+@app.post("/cron/send-daily-cuts")
+def cron_send_daily_cuts():
+    try:
+        secret = request.headers.get("x-cron-secret", "").strip()
+        if PANEL_CRON_SECRET and secret != PANEL_CRON_SECRET:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+        day_str = _safe(request.args.get("day")) or _panel_day_str()
+
+        lock_key = f"cron_sent_daily_cuts:{day_str}"
+        if not redis_conn.set(lock_key, "1", ex=60 * 60 * 6, nx=True):
+            return jsonify({
+                "ok": True,
+                "skipped": "already_sent",
+                "day": day_str,
+            }), 200
+
+        result = send_daily_cuts(day_str=day_str)
+        return jsonify(result), 200
+
+    except Exception as e:
+        print("cron_send_daily_cuts error:", repr(e), flush=True)
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.get("/panel/cuts")
+def panel_cuts():
+    view = _safe(request.args.get("view")).lower() or "day"
+    group_jid = _safe(request.args.get("group_jid"))
+    day_param = _safe(request.args.get("day"))
+
+    if day_param:
+        days = [day_param]
+        subtitle = f"Corte diario: {_period_day_label_es(day_param)} ({PANEL_TZ})"
+        view = "day"
+    else:
+        days = _period_days(view)
+        if view == "week":
+            subtitle = f"Historial semanal: {days[0]} a {days[-1]} ({PANEL_TZ})"
+        else:
+            subtitle = f"Corte diario: {_today_label_es()} ({PANEL_TZ})"
+
+    def esc(v):
+        if v is None:
+            return ""
+        return str(v)
+
+    if group_jid:
+        detail = _load_cut_detail_for_group(group_jid, days)
+        totals = detail["totals"]
+
+        html = f"""
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Detalle de cortes</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {{ font-family: Arial, sans-serif; background:#f5f7fb; margin:0; padding:16px; color:#0f172a; }}
+    .wrap {{ max-width:1200px; margin:0 auto; }}
+    .hero {{ background:#0f172a; color:white; padding:20px; border-radius:18px; margin-bottom:16px; }}
+    .hero a {{ color:#93c5fd; text-decoration:none; font-weight:700; }}
+    .box {{ background:white; border-radius:18px; box-shadow:0 8px 24px rgba(15,23,42,.08); overflow:hidden; }}
+    table {{ width:100%; border-collapse:collapse; }}
+    th, td {{ padding:12px; border-bottom:1px solid #e2e8f0; text-align:left; }}
+    th {{ background:#0f172a; color:white; }}
+    .right {{ text-align:right; }}
+    .total-row td {{ font-weight:700; background:#f8fafc; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <div><a href="/panel/cuts?view={esc(view)}">← Volver al historial</a></div>
+      <h2 style="margin:10px 0 6px;">{esc(detail["group_name"])}</h2>
+      <div>{esc(subtitle)}</div>
+    </div>
+
+    <div class="box">
+      <table>
+        <thead>
+          <tr>
+            <th>Día</th>
+            <th>Fecha</th>
+            <th class="right">RFC clon</th>
+            <th class="right">RFC idcif</th>
+            <th class="right">Precio clon</th>
+            <th class="right">Precio idcif</th>
+            <th class="right">$ clon</th>
+            <th class="right">$ idcif</th>
+            <th class="right">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+        """
+
+        for r in detail["rows"]:
+            html += f"""
+          <tr>
+            <td>{esc(r["day_name"])}</td>
+            <td>{esc(r["date"])}</td>
+            <td class="right">{esc(r["count_clon"])}</td>
+            <td class="right">{esc(r["count_idcif"])}</td>
+            <td class="right">${esc(_fmt_money(r["price_clon"]))}</td>
+            <td class="right">${esc(_fmt_money(r["price_idcif"]))}</td>
+            <td class="right">${esc(_fmt_money(r["subtotal_clon"]))}</td>
+            <td class="right">${esc(_fmt_money(r["subtotal_idcif"]))}</td>
+            <td class="right">${esc(_fmt_money(r["total"]))}</td>
+          </tr>
+            """
+
+        html += f"""
+          <tr class="total-row">
+            <td colspan="2">TOTAL</td>
+            <td class="right">{esc(totals["count_clon"])}</td>
+            <td class="right">{esc(totals["count_idcif"])}</td>
+            <td></td>
+            <td></td>
+            <td class="right">${esc(_fmt_money(totals["subtotal_clon"]))}</td>
+            <td class="right">${esc(_fmt_money(totals["subtotal_idcif"]))}</td>
+            <td class="right">${esc(_fmt_money(totals["total"]))}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
+        """
+        return Response(html, mimetype="text/html")
+
+    rows = _load_cut_rows_for_days(days)
+    summary = _cut_summary(rows)
+
+    html = f"""
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Historial de cortes</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {{ font-family: Arial, sans-serif; background:#f5f7fb; margin:0; padding:16px; color:#0f172a; }}
+    .wrap {{ max-width:1400px; margin:0 auto; }}
+    .hero {{ background:linear-gradient(135deg,#0f172a 0%, #1e293b 55%, #2563eb 100%); color:white; padding:22px; border-radius:20px; margin-bottom:16px; }}
+    .toolbar {{ margin-top:12px; display:flex; gap:10px; flex-wrap:wrap; }}
+    .tool-link {{ text-decoration:none; padding:10px 14px; border-radius:10px; background:rgba(255,255,255,.16); color:white; font-weight:700; }}
+    .tool-link-active {{ background:white; color:#0f172a; }}
+    .cards {{ display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:16px; }}
+    .card {{ background:white; border-radius:16px; padding:16px; box-shadow:0 8px 24px rgba(15,23,42,.08); }}
+    .label {{ color:#64748b; font-size:.9rem; margin-bottom:8px; }}
+    .value {{ font-size:1.8rem; font-weight:800; }}
+    .box {{ background:white; border-radius:18px; box-shadow:0 8px 24px rgba(15,23,42,.08); overflow:hidden; }}
+    .head {{ display:flex; align-items:center; justify-content:space-between; padding:16px 18px; border-bottom:1px solid #e2e8f0; gap:12px; flex-wrap:wrap; }}
+    .head h3 {{ margin:0; }}
+    table {{ width:100%; border-collapse:collapse; }}
+    th, td {{ padding:12px; border-bottom:1px solid #e2e8f0; text-align:left; }}
+    th {{ background:#0f172a; color:white; }}
+    .right {{ text-align:right; }}
+    .btn {{
+      border:none; border-radius:10px; padding:9px 12px; font-weight:700; cursor:pointer;
+      background:#2563eb; color:white;
+    }}
+    .btn-green {{ background:#16a34a; }}
+    .inline-form {{ margin:0; display:inline-block; }}
+    @media (max-width: 900px) {{
+      .cards {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+      .table-wrap {{ overflow-x:auto; }}
+    }}
+    @media (max-width: 520px) {{
+      .cards {{ grid-template-columns:1fr; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <h1 style="margin:0 0 8px;">Historial de cortes</h1>
+      <div>{esc(subtitle)}</div>
+
+      <div class="toolbar">
+        <a href="/panel" class="tool-link">Panel</a>
+        <a href="/panel/cuts?view=day" class="tool-link {'tool-link-active' if view == 'day' else ''}">Corte de hoy</a>
+        <a href="/panel/cuts?view=week" class="tool-link {'tool-link-active' if view == 'week' else ''}">Lunes a domingo</a>
+      </div>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="label">Grupos con actividad</div>
+        <div class="value">{esc(summary["groups"])}</div>
+      </div>
+      <div class="card">
+        <div class="label">RFC clon</div>
+        <div class="value">{esc(summary["count_clon"])}</div>
+      </div>
+      <div class="card">
+        <div class="label">RFC idcif</div>
+        <div class="value">{esc(summary["count_idcif"])}</div>
+      </div>
+      <div class="card">
+        <div class="label">$ clon</div>
+        <div class="value">${esc(_fmt_money(summary["subtotal_clon"]))}</div>
+      </div>
+      <div class="card">
+        <div class="label">Total</div>
+        <div class="value">${esc(_fmt_money(summary["total"]))}</div>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="head">
+        <h3>Resumen por grupo</h3>
+        {"<form class='inline-form' method='post' action='/panel/send-daily-cuts'><input type='hidden' name='day' value='" + esc(_panel_day_str()) + "'><button class='btn btn-green' type='submit'>Enviar cortes de hoy</button></form>" if view == "day" else ""}
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Grupo</th>
+              <th class="right">RFC clon</th>
+              <th class="right">RFC idcif</th>
+              <th class="right">Precio clon</th>
+              <th class="right">Precio idcif</th>
+              <th class="right">$ clon</th>
+              <th class="right">$ idcif</th>
+              <th class="right">Total</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+    """
+
+    if rows:
+        for r in rows:
+            html += f"""
+            <tr>
+              <td>{esc(r["group_name"])}<br><span style="color:#64748b; font-size:.82rem;">{esc(r["group_jid"])}</span></td>
+              <td class="right">{esc(r["count_clon"])}</td>
+              <td class="right">{esc(r["count_idcif"])}</td>
+              <td class="right">${esc(_fmt_money(r["price_clon"]))}</td>
+              <td class="right">${esc(_fmt_money(r["price_idcif"]))}</td>
+              <td class="right">${esc(_fmt_money(r["subtotal_clon"]))}</td>
+              <td class="right">${esc(_fmt_money(r["subtotal_idcif"]))}</td>
+              <td class="right">${esc(_fmt_money(r["total"]))}</td>
+              <td>
+                <a class="tool-link" style="background:#2563eb; color:#fff; border:none;" href="/panel/cuts?view={esc(view)}&group_jid={esc(r["group_jid"])}">Detalle</a>
+                {"<form class='inline-form' method='post' action='/panel/send-daily-cut-group' style='margin-left:8px;'><input type='hidden' name='group_jid' value='" + esc(r["group_jid"]) + "'><input type='hidden' name='day' value='" + esc(_panel_day_str()) + "'><button class='btn btn-green' type='submit'>Enviar</button></form>" if view == "day" else ""}
+              </td>
+            </tr>
+            """
+    else:
+        html += """
+            <tr>
+              <td colspan="9" style="text-align:center; color:#64748b; padding:24px;">Sin actividad en este periodo.</td>
+            </tr>
+        """
+
+    html += """
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+    """
+
+    return Response(html, mimetype="text/html")
 
 @app.get("/panel")
 def panel_stats():
@@ -1688,6 +2315,7 @@ def panel_stats():
       <div class="toolbar">
         <a href="/panel" class="tool-link {'tool-link-active' if view != 'week' else ''}">Hoy</a>
         <a href="/panel?view=week" class="tool-link {'tool-link-active' if view == 'week' else ''}">Semana actual</a>
+        <a href="/panel/cuts?view=day" class="tool-link">Historial cortes</a>
       </div>
     </section>
 
