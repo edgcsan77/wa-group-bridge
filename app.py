@@ -1561,9 +1561,18 @@ def panel_send_daily_cuts():
 
 @app.get("/cron/reset")
 def reset_cron():
-    key = f"cron_sent_daily_cuts:{_panel_day_str()}"
-    redis_conn.delete(key)
-    return {"ok": True, "deleted": key}
+    day = _panel_day_str()
+
+    key_morning = f"cron_sent_morning_image:{day}"
+    key_cuts = f"cron_sent_daily_cuts:{day}"
+
+    redis_conn.delete(key_morning)
+    redis_conn.delete(key_cuts)
+
+    return {
+        "ok": True,
+        "deleted": [key_morning, key_cuts]
+    }
 
 def evolution_send_image_to_group(group_jid: str, media_url: str, file_name: str = "aviso.jpg", caption: str = ""):
     url = f"{EVOLUTION_BASE_URL}/message/sendMedia/{EVOLUTION_INSTANCE}"
