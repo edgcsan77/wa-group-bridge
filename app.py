@@ -1565,6 +1565,110 @@ def reset_cron():
     redis_conn.delete(key)
     return {"ok": True, "deleted": key}
 
+def evolution_send_image_to_group(group_jid: str, media_url: str, file_name: str = "aviso.jpg", caption: str = ""):
+    url = f"{EVOLUTION_BASE_URL}/message/sendMedia/{EVOLUTION_INSTANCE}"
+    payload = {
+        "number": group_jid,
+        "mediatype": "image",
+        "media": media_url,
+        "fileName": file_name,
+        "caption": caption,
+    }
+
+    r = requests.post(url, json=payload, headers=evolution_headers(), timeout=120)
+    print("sendImage payload:", payload, flush=True)
+    print("sendImage resp:", r.status_code, r.text, flush=True)
+    r.raise_for_status()
+    return r.json()
+
+def send_image_to_one_group(group_jid: str, image_url: str, file_name: str = "aviso.jpg", caption: str = ""):
+    if not group_jid:
+        return {"ok": False, "error": "group_jid vacío"}
+
+    if is_group_blocked(group_jid):
+        return {"ok": False, "error": "group_blocked", "group_jid": group_jid}
+
+    try:
+        evolution_send_image_to_group(
+            group_jid=group_jid,
+            media_url=image_url,
+            file_name=file_name,
+            caption=caption,
+        )
+        return {
+            "ok": True,
+            "group_jid": group_jid,
+            "group_name": GROUP_NAME_MAP.get(group_jid) or group_jid,
+        }
+    except Exception as e:
+        print("send_image_to_one_group error:", group_jid, repr(e), flush=True)
+        return {
+            "ok": False,
+            "group_jid": group_jid,
+            "group_name": GROUP_NAME_MAP.get(group_jid) or group_jid,
+            "error": str(e),
+        }
+
+@app.post("/panel/test-send-warning-image")
+def panel_test_send_warning_image():
+    try:
+        secret = request.headers.get("x-cron-secret", "").strip()
+        if PANEL_CRON_SECRET and secret != PANEL_CRON_SECRET:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+        group_jid = _safe(request.args.get("group_jid")) or _safe(request.form.get("group_jid"))
+        if not group_jid:
+            return jsonify({"ok": False, "error": "group_jid requerido"}), 400
+
+        aviso_img = "https://res.cloudinary.com/dxq7oqiig/image/upload/v1774050692/1000016581_pbs0hc.jpg"
+
+        result = send_image_to_one_group(
+            group_jid=group_jid,
+            image_url=aviso_img,
+            file_name="aviso.jpg",
+            caption="",
+        )
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        print("panel_test_send_warning_image error:", repr(e), flush=True)
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+def send_image_to_all_groups(image_url: str, file_name: str = "aviso.jpg", caption: str = ""):
+    sent = []
+    failed = []
+
+    target_groups = set(GROUP_NAME_MAP.keys())
+
+    if ALLOWED_GROUPS:
+        target_groups = target_groups.intersection(ALLOWED_GROUPS)
+
+    for group_jid in sorted(target_groups):
+        if is_group_blocked(group_jid):
+            continue
+
+        try:
+            evolution_send_image_to_group(
+                group_jid=group_jid,
+                media_url=image_url,
+                file_name=file_name,
+                caption=caption,
+            )
+            sent.append(group_jid)
+        except Exception as e:
+            print("error enviando imagen a grupo:", group_jid, repr(e), flush=True)
+            failed.append({
+                "group_jid": group_jid,
+                "error": str(e),
+            })
+
+    return {
+        "sent": sent,
+        "failed": failed,
+    }
+
 @app.post("/cron/send-daily-cuts")
 def cron_send_daily_cuts():
     try:
@@ -1573,7 +1677,6 @@ def cron_send_daily_cuts():
             return jsonify({"ok": False, "error": "unauthorized"}), 401
 
         day_str = _safe(request.args.get("day")) or _panel_day_str()
-
         lock_key = f"cron_sent_daily_cuts:{day_str}"
 
         if redis_conn.get(lock_key):
@@ -1582,15 +1685,34 @@ def cron_send_daily_cuts():
                 "skipped": "already_sent",
                 "day": day_str,
             }), 200
-        
+
+        AVISO_IMG = "https://res.cloudinary.com/dxq7oqiig/image/upload/v1774050692/1000016581_pbs0hc.jpg"
+
+        image_result = send_image_to_all_groups(
+            image_url=AVISO_IMG,
+            file_name="aviso.jpg",
+            caption=""
+        )
+
+        import time
+        time.sleep(2)
+
         result = send_daily_cuts(day_str=day_str)
-        
+
         sent = result.get("sent") or []
-        
-        if sent:
+
+        # bloquea el día si mandó imagen o si mandó cortes
+        if image_result.get("sent") or sent:
             redis_conn.set(lock_key, "1", ex=60 * 60 * 24)
 
-        return jsonify(result), 200
+        return jsonify({
+            "ok": True,
+            "day": day_str,
+            "image_sent": image_result.get("sent") or [],
+            "image_failed": image_result.get("failed") or [],
+            "cuts_sent": sent,
+            "cuts_skipped": result.get("skipped") or [],
+        }), 200
 
     except Exception as e:
         print("cron_send_daily_cuts error:", repr(e), flush=True)
