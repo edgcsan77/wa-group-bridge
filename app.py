@@ -1609,6 +1609,46 @@ def send_image_to_one_group(group_jid: str, image_url: str, file_name: str = "av
             "error": str(e),
         }
 
+@app.post("/panel/test-send-warning-and-cut")
+def panel_test_send_warning_and_cut():
+    try:
+        secret = request.headers.get("x-cron-secret", "").strip()
+        if PANEL_CRON_SECRET and secret != PANEL_CRON_SECRET:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+        group_jid = _safe(request.args.get("group_jid")) or _safe(request.form.get("group_jid"))
+        day_str = _safe(request.args.get("day")) or _safe(request.form.get("day")) or _panel_day_str()
+
+        if not group_jid:
+            return jsonify({"ok": False, "error": "group_jid requerido"}), 400
+
+        aviso_img = "https://res.cloudinary.com/dxq7oqiig/image/upload/v1774050692/1000016581_pbs0hc.jpg"
+
+        image_result = send_image_to_one_group(
+            group_jid=group_jid,
+            image_url=aviso_img,
+            file_name="aviso.jpg",
+            caption="",
+        )
+
+        import time
+        time.sleep(2)
+
+        cut_result = send_daily_cut_for_group(group_jid=group_jid, day_str=day_str)
+
+        return jsonify({
+            "ok": True,
+            "group_jid": group_jid,
+            "day": day_str,
+            "image_result": image_result,
+            "cut_result": cut_result,
+        }), 200
+
+    except Exception as e:
+        print("panel_test_send_warning_and_cut error:", repr(e), flush=True)
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.post("/panel/test-send-warning-image")
 def panel_test_send_warning_image():
     try:
