@@ -1663,7 +1663,7 @@ def cron_test_morning_image():
 
         MORNING_IMG = "https://res.cloudinary.com/dxq7oqiig/image/upload/v1774052305/WhatsApp_Image_2026-03-20_at_7.18.07_PM_byfou8.jpg"
 
-        evolution_send_media_to_group(
+        evolution_send_image_to_group(
             group_jid=group_jid,
             media_url=MORNING_IMG,
             file_name="inicio.jpg",
