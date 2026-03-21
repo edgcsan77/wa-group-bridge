@@ -1709,6 +1709,47 @@ def send_image_to_all_groups(image_url: str, file_name: str = "aviso.jpg", capti
         "failed": failed,
     }
 
+@app.post("/cron/send-morning-image")
+def cron_send_morning_image():
+    try:
+        secret = request.headers.get("x-cron-secret", "").strip()
+        if PANEL_CRON_SECRET and secret != PANEL_CRON_SECRET:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+        day_str = _panel_day_str()
+        lock_key = f"cron_sent_morning_image:{day_str}"
+
+        # evitar duplicados
+        if redis_conn.get(lock_key):
+            return jsonify({
+                "ok": True,
+                "skipped": "already_sent",
+                "day": day_str,
+            }), 200
+
+        MORNING_IMG = "https://res.cloudinary.com/dxq7oqiig/image/upload/v1774052305/WhatsApp_Image_2026-03-20_at_7.18.07_PM_byfou8.jpg"
+
+        result = send_image_to_all_groups(
+            image_url=MORNING_IMG,
+            file_name="inicio.jpg",
+            caption="🌅 Buen día, ya puedes enviar tus solicitudes"
+        )
+
+        if result.get("sent"):
+            redis_conn.set(lock_key, "1", ex=60 * 60 * 24)
+
+        return jsonify({
+            "ok": True,
+            "day": day_str,
+            "sent": result.get("sent"),
+            "failed": result.get("failed"),
+        }), 200
+
+    except Exception as e:
+        print("cron_send_morning_image error:", repr(e), flush=True)
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.post("/cron/send-daily-cuts")
 def cron_send_daily_cuts():
     try:
