@@ -90,13 +90,59 @@ ENTIDAD_CORTE = "Nu México"
 
 # Precio por defecto si el grupo no está en el mapa
 DEFAULT_PRICES = {
-    "clon": 5.00,
-    "idcif": 5.00,
+    "clon": 0.00,
+    "idcif": 0.00,
 }
 
 # PERSONALIZA AQUÍ LOS PRECIOS POR GRUPO
 GROUP_PRICES = {
-    "120363425323721713@g.us": {"clon": 5.00, "idcif": 5.00},   # PRUEBA
+    "120363425323721713@g.us": {"clon": 0.00, "idcif": 0.00},  # PRUEBA
+    "120363424298172274@g.us": {"clon": 6.00, "idcif": 6.00},  # KEDETALLE
+    "120363405833386653@g.us": {"clon": 5.00, "idcif": 5.00},  # KAREN
+    "120363423412816922@g.us": {"clon": 6.00, "idcif": 6.00},  # LUIS ARMANDO
+    "120363425261888443@g.us": {"clon": 5.00, "idcif": 5.00},  # SVS. DIGITALES
+    "120363424415085327@g.us": {"clon": 4.00, "idcif": 3.00},  # PADRON RFC 2026
+    "120363425761743324@g.us": {"clon": 5.00, "idcif": 5.00},  # TRAMITES ANA
+    "120363407782555379@g.us": {"clon": 5.00, "idcif": 5.00},  # CARIDAD
+    "120363407149613052@g.us": {"clon": 5.00, "idcif": 5.00},  # GESTORIA AC
+    "120363422922827356@g.us": {"clon": 5.00, "idcif": 5.00},  # DAY
+    "120363408404644680@g.us": {"clon": 3.50, "idcif": 2.00},  # LILI
+    "120363424434192043@g.us": {"clon": 5.00, "idcif": 4.00},  # PEREYRA
+    "120363406744080404@g.us": {"clon": 3.50, "idcif": 1.50},  # MELANI
+    "120363424161924716@g.us": {"clon": 5.00, "idcif": 5.00},  # DANIEL
+    "120363407784035104@g.us": {"clon": 6.00, "idcif": 6.00},  # VALLARTA
+    "120363404433497990@g.us": {"clon": 40.00, "idcif": 40.00},  # ZENITRAN
+    "120363405310833172@g.us": {"clon": 5.00, "idcif": 3.00},  # EDUARDO
+    "120363424106109563@g.us": {"clon": 5.00, "idcif": 4.00},  # TREVIÑO
+    "120363425336493958@g.us": {"clon": 5.00, "idcif": 5.00},  # MORELOS
+    "120363427426623452@g.us": {"clon": 8.00, "idcif": 8.00},  # NORKI LEAL
+
+    # MAX (incluye todos los MAX 1–6)
+    "120363424256034923@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 1
+    "120363408231220228@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 2
+    "120363424846520578@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 3
+    "120363404313875699@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 4
+    "120363424117651122@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 5
+    "120363425605880699@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 6
+
+    "120363407274319744@g.us": {"clon": 30.00, "idcif": 30.00},  # NEGOCIO IMPERIO
+    "120363424987815870@g.us": {"clon": 40.00, "idcif": 40.00},  # NEGOCIO AIRENET
+    "120363424921651306@g.us": {"clon": 25.00, "idcif": 25.00},  # CIBERT SAN LUIS
+    "120363424526047978@g.us": {"clon": 30.00, "idcif": 30.00},  # PAPELERIA MC
+    "120363421612572808@g.us": {"clon": 25.00, "idcif": 25.00},  # SERVITODO
+    "120363426454500572@g.us": {"clon": 5.00, "idcif": 5.00},  # GESTORIA MARTINEZ
+    "120363406986631838@g.us": {"clon": 35.00, "idcif": 35.00},  # BELLADIRA
+    "120363422728933907@g.us": {"clon": 35.00, "idcif": 35.00},  # BATALLON
+    "120363423715238694@g.us": {"clon": 5.00, "idcif": 5.00},  # ANA PINEDA
+    "120363406852977870@g.us": {"clon": 35.00, "idcif": 35.00},  # ALMA
+    "120363421904462408@g.us": {"clon": 6.00, "idcif": 6.00},  # VERACRUZ
+    "120363423742899713@g.us": {"clon": 4.00, "idcif": 2.00},  # JOYA
+    "120363424196692440@g.us": {"clon": 7.00, "idcif": 5.00},  # ISIDRO
+    "120363423807195838@g.us": {"clon": 6.00, "idcif": 6.00},  # HIRO
+    "120363423486806524@g.us": {"clon": 40.00, "idcif": 40.00},  # SERCOMEX
+    "120363409658465099@g.us": {"clon": 4.00, "idcif": 3.00},  # DIEGO
+    "120363424548688064@g.us": {"clon": 8.00, "idcif": 8.00},  # MARVIN
+    "120363410011580719@g.us": {"clon": 4.00, "idcif": 2.00},  # RODOLFO
 }
 
 # =========================
