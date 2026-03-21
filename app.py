@@ -1649,6 +1649,35 @@ def panel_test_send_warning_and_cut():
         traceback.print_exc()
         return jsonify({"ok": False, "error": str(e)}), 500
 
+@app.route("/cron/test-morning-image", methods=["GET","POST"])
+def cron_test_morning_image():
+    try:
+        secret = request.headers.get("x-cron-secret", "").strip()
+        if PANEL_CRON_SECRET and secret != PANEL_CRON_SECRET:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+        group_jid = _safe(request.args.get("group_jid"))
+
+        if not group_jid:
+            return jsonify({"ok": False, "error": "group_jid requerido"}), 400
+
+        MORNING_IMG = "https://res.cloudinary.com/dxq7oqiig/image/upload/v1774052305/WhatsApp_Image_2026-03-20_at_7.18.07_PM_byfou8.jpg"
+
+        evolution_send_media_to_group(
+            group_jid=group_jid,
+            media_url=MORNING_IMG,
+            file_name="inicio.jpg",
+        )
+
+        return jsonify({
+            "ok": True,
+            "group_jid": group_jid
+        }), 200
+
+    except Exception as e:
+        print("cron_test_morning_image error:", repr(e), flush=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.post("/panel/test-send-warning-image")
 def panel_test_send_warning_image():
     try:
