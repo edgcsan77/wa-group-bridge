@@ -122,14 +122,18 @@ GROUP_PRICES = {
     "120363425336493958@g.us": {"clon": 5.00, "idcif": 5.00},  # MORELOS
     "120363427426623452@g.us": {"clon": 8.00, "idcif": 8.00},  # NORKI LEAL
 
-    # MAX (incluye todos los MAX 1–6)
+    # MAX (incluye todos los MAX 1–10)
     "120363424256034923@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 1
     "120363408231220228@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 2
     "120363424846520578@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 3
     "120363404313875699@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 4
-    "120363424117651122@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 5
     "120363423948864434@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 5
     "120363425605880699@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 6
+    "120363427046929010@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 7
+    "120363426519871561@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 8
+    "120363427164559374@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 9
+    "120363407250162731@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX 10
+    "120363424117651122@g.us": {"clon": 4.00, "idcif": 2.00},  # MAX ELIMINADO
 
     "120363407274319744@g.us": {"clon": 30.00, "idcif": 30.00},  # NEGOCIO IMPERIO
     "120363424987815870@g.us": {"clon": 40.00, "idcif": 40.00},  # NEGOCIO AIRENET
@@ -149,6 +153,24 @@ GROUP_PRICES = {
     "120363409658465099@g.us": {"clon": 4.00, "idcif": 3.00},  # DIEGO
     "120363424548688064@g.us": {"clon": 8.00, "idcif": 8.00},  # MARVIN
     "120363410011580719@g.us": {"clon": 4.00, "idcif": 2.00},  # RODOLFO
+}
+
+NO_CORTE_GROUPS = {
+    "120363425323721713@g.us",  # PRUEBA DOCIFY MX
+    "120363424415085327@g.us",  # PADRON RFC 2026
+    "120363408404644680@g.us",  # LILI CLON Y IDCIF
+    "120363424256034923@g.us",  # MAX 1
+    "120363408231220228@g.us",  # MAX 2
+    "120363424846520578@g.us",  # MAX 3
+    "120363404313875699@g.us",  # MAX 4
+    "120363423948864434@g.us",  # MAX 5
+    "120363425605880699@g.us",  # MAX 6
+    "120363427046929010@g.us",  # MAX 7
+    "120363426519871561@g.us",  # MAX 8
+    "120363427164559374@g.us",  # MAX 9
+    "120363407250162731@g.us",  # MAX 10
+    "120363424117651122@g.us",  # MAX ELIMINADO
+    "120363409658465099@g.us",  # DIEGO
 }
 
 # =========================
@@ -1197,6 +1219,12 @@ def _build_cut_message(group_name: str, date_label: str, count_clon: int, price_
     )
 
 def send_daily_cut_for_group(group_jid: str, day_str: str = None):
+    if group_jid in NO_CORTE_GROUPS:
+        return {
+            "ok": False,
+            "error": "Grupo excluido de corte."
+        }
+    
     day_str = (day_str or _panel_day_str()).strip()
     rows = _load_cut_rows_for_days([day_str])
 
@@ -1240,8 +1268,12 @@ def send_daily_cuts(day_str: str = None):
 
     sent = []
     skipped = []
-
+    
     for r in rows:
+        if r["group_jid"] in NO_CORTE_GROUPS:
+            skipped.append(r["group_jid"])
+            continue
+        
         if _safe_float(r.get("total")) <= 0:
             skipped.append(r["group_jid"])
             continue
