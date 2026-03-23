@@ -1860,7 +1860,7 @@ def cron_send_morning_image():
         result = send_image_to_all_groups(
             image_url=MORNING_IMG,
             file_name="inicio.jpg",
-            caption="🌅 Buen día, ya puedes enviar tus solicitudes"
+            caption="🐇 Buen día, ya pueden enviar sus solicitudes"
         )
 
         if result.get("sent"):
