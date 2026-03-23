@@ -1206,7 +1206,7 @@ def _cut_summary(rows):
 
 def _build_cut_message(group_name: str, date_label: str, count_clon: int, price_clon: float, subtotal_clon: float, count_idcif: int, price_idcif: float, subtotal_idcif: float, total: float) -> str:
     return (
-        f"🐇 *DOCU EXPRES*\n\n"
+        f"🚀 *DOCU EXPRES*\n\n"
         f"*{group_name}*\n"
         f"*CORTE DE FECHA* {date_label}\n\n"
         f"{count_clon} RFC clon x ${_fmt_money(price_clon)} = ${_fmt_money(subtotal_clon)}\n"
@@ -1499,7 +1499,7 @@ def evolution_webhook():
             try:
                 evolution_send_text(
                     group_jid=remote_jid,
-                    text=f"🐇 DOCU EXPRES\nSolicitud recibida de {requester_label}.\nEsto puede tardar unos minutos..."
+                    text=f"🚀 DOCU EXPRES\nSolicitud recibida de {requester_label}.\nEsto puede tardar unos minutos..."
                 )
             except Exception as e:
                 print("group ack error:", repr(e), flush=True)
@@ -1860,7 +1860,7 @@ def cron_send_morning_image():
         result = send_image_to_all_groups(
             image_url=MORNING_IMG,
             file_name="inicio.jpg",
-            caption="🐇 Buen día, ya pueden enviar sus solicitudes"
+            caption="🚀 Buen día, ya pueden enviar sus solicitudes"
         )
 
         if result.get("sent"):
