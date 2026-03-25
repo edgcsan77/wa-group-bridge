@@ -2276,7 +2276,7 @@ def panel_stats():
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <title>Panel puente WA</title>
+  <title>Panel RFC</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     :root {{
@@ -2722,7 +2722,7 @@ def panel_stats():
 <body>
   <div class="wrap">
     <section class="hero">
-      <h1>Panel puente WA</h1>
+      <h1>Panel de RFC</h1>
       <p class="sub">
         {subtitle}
       </p>
