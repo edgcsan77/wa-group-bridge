@@ -75,6 +75,7 @@ GROUP_NAME_MAP = {
     "120363423486806524@g.us": "SERCOMEX",
     "120363409658465099@g.us": "DIEGO",
     "120363424548688064@g.us": "MARVIN",
+    "120363425116755394@g.us": "DOCIFY 1",
 }
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -153,6 +154,7 @@ GROUP_PRICES = {
     "120363409658465099@g.us": {"clon": 4.00, "idcif": 3.00},  # DIEGO
     "120363424548688064@g.us": {"clon": 8.00, "idcif": 8.00},  # MARVIN
     "120363410011580719@g.us": {"clon": 4.00, "idcif": 2.00},  # RODOLFO
+    "120363425116755394@g.us": {"clon": 7.00, "idcif": 0.00},  # DOCIFY 1
 }
 
 NO_CORTE_GROUPS = {
