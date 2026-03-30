@@ -77,6 +77,7 @@ GROUP_NAME_MAP = {
     "120363424548688064@g.us": "MARVIN",
     "120363425116755394@g.us": "DOCIFY 1",
     "120363425494922075@g.us": "DOCIFY 2",
+    "120363425965991832@g.us": "DOCS",
 }
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
