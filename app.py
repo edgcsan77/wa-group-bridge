@@ -201,6 +201,45 @@ NO_CORTE_GROUPS = {
 # =========================
 BLOCKED_GROUPS_KEY = "blocked_groups"
 
+NO_CORTE_GROUPS_KEY = "no_corte_groups"
+
+def get_no_corte_groups() -> set:
+    try:
+        vals = redis_conn.smembers(NO_CORTE_GROUPS_KEY) or set()
+        out = set(NO_CORTE_GROUPS)  # conserva los hardcodeados actuales
+        for v in vals:
+            if isinstance(v, bytes):
+                out.add(v.decode("utf-8", errors="ignore"))
+            else:
+                out.add(str(v))
+        return out
+    except Exception as e:
+        print("get_no_corte_groups error:", repr(e), flush=True)
+        return set(NO_CORTE_GROUPS)
+
+def is_group_no_corte(group_jid: str) -> bool:
+    try:
+        if not group_jid:
+            return False
+        return group_jid in get_no_corte_groups()
+    except Exception as e:
+        print("is_group_no_corte error:", repr(e), flush=True)
+        return group_jid in NO_CORTE_GROUPS
+
+def disable_cut_group(group_jid: str):
+    try:
+        if group_jid:
+            redis_conn.sadd(NO_CORTE_GROUPS_KEY, group_jid)
+    except Exception as e:
+        print("disable_cut_group error:", repr(e), flush=True)
+
+def enable_cut_group(group_jid: str):
+    try:
+        if group_jid:
+            redis_conn.srem(NO_CORTE_GROUPS_KEY, group_jid)
+    except Exception as e:
+        print("enable_cut_group error:", repr(e), flush=True)
+
 def is_group_blocked(group_jid: str) -> bool:
     try:
         if not group_jid:
@@ -1243,7 +1282,7 @@ def _build_cut_message(group_name: str, date_label: str, count_clon: int, price_
     )
 
 def send_daily_cut_for_group(group_jid: str, day_str: str = None):
-    if group_jid in NO_CORTE_GROUPS:
+    if is_group_no_corte(group_jid):
         return {
             "ok": False,
             "error": "Grupo excluido de corte."
@@ -1294,7 +1333,7 @@ def send_daily_cuts(day_str: str = None):
     skipped = []
     
     for r in rows:
-        if r["group_jid"] in NO_CORTE_GROUPS:
+        if is_group_no_corte(r["group_jid"]):
             skipped.append(r["group_jid"])
             continue
         
@@ -1581,6 +1620,44 @@ def panel_api_stats():
         "summary": summary,
         "rows": rows,
     }), 200
+
+@app.post("/panel/disable-cut-group")
+def panel_disable_cut_group():
+    try:
+        group_jid = _safe(request.form.get("group_jid"))
+        view = _safe(request.form.get("view")).lower()
+
+        if not group_jid:
+            return "group_jid requerido", 400
+
+        disable_cut_group(group_jid)
+
+        if view == "week":
+            return redirect("/panel?view=week")
+        return redirect("/panel")
+    except Exception as e:
+        print("panel_disable_cut_group error:", repr(e), flush=True)
+        traceback.print_exc()
+        return "error desactivando corte del grupo", 500
+
+@app.post("/panel/enable-cut-group")
+def panel_enable_cut_group():
+    try:
+        group_jid = _safe(request.form.get("group_jid"))
+        view = _safe(request.form.get("view")).lower()
+
+        if not group_jid:
+            return "group_jid requerido", 400
+
+        enable_cut_group(group_jid)
+
+        if view == "week":
+            return redirect("/panel?view=week")
+        return redirect("/panel")
+    except Exception as e:
+        print("panel_enable_cut_group error:", repr(e), flush=True)
+        traceback.print_exc()
+        return "error activando corte del grupo", 500
 
 @app.post("/panel/block-group")
 def panel_block_group():
@@ -2294,6 +2371,8 @@ def panel_stats():
             return ""
         return str(v)
 
+    no_corte_groups = get_no_corte_groups()
+    
     html = f"""
 <!doctype html>
 <html lang="es">
@@ -2619,6 +2698,32 @@ def panel_stats():
       background: white;
       color: #0f172a;
     }}
+
+    .status-cut-on {{
+      background: #ecfdf5;
+      color: #15803d;
+    }}
+    
+    .status-cut-off {{
+      background: #fff7ed;
+      color: #c2410c;
+    }}
+    
+    .btn-cut-on {{
+      background: #2563eb;
+      color: white;
+    }}
+    
+    .btn-cut-off {{
+      background: #ea580c;
+      color: white;
+    }}
+    
+    .actions-stack {{
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }}
     
     @media (max-width: 720px) {{
       .btn {{
@@ -2795,6 +2900,7 @@ def panel_stats():
             <tr>
               <th>Grupo</th>
               <th>Estado</th>
+              <th>Corte</th>
               <th class="right">Total</th>
               <th class="right">RFC_IDCIF</th>
               <th class="right">QR</th>
@@ -2809,50 +2915,84 @@ def panel_stats():
 
     if rows:
         for r in rows:
+            group_jid = esc(r["group_jid"])
             blocked = bool(r.get("blocked"))
+            no_corte = r["group_jid"] in no_corte_groups
+
             status_html = (
                 '<span class="status-pill status-blocked">BLOQUEADO</span>'
                 if blocked else
                 '<span class="status-pill status-active">ACTIVO</span>'
             )
-    
+
+            cut_html = (
+                '<span class="status-pill status-cut-off">SIN CORTE</span>'
+                if no_corte else
+                '<span class="status-pill status-cut-on">CON CORTE</span>'
+            )
+
             if blocked:
-                action_html = f"""
+                block_action_html = f"""
                 <form class="action-form" method="post" action="/panel/unblock-group">
-                  <input type="hidden" name="group_jid" value="{esc(r["group_jid"])}">
+                  <input type="hidden" name="group_jid" value="{group_jid}">
                   <input type="hidden" name="view" value="{esc(view)}">
                   <button class="btn btn-unblock" type="submit">Desbloquear</button>
                 </form>
                 """
             else:
-                action_html = f"""
+                block_action_html = f"""
                 <form class="action-form" method="post" action="/panel/block-group">
-                  <input type="hidden" name="group_jid" value="{esc(r["group_jid"])}">
+                  <input type="hidden" name="group_jid" value="{group_jid}">
                   <input type="hidden" name="view" value="{esc(view)}">
                   <button class="btn btn-block" type="submit">Bloquear</button>
                 </form>
                 """
-    
+
+            if no_corte:
+                cut_action_html = f"""
+                <form class="action-form" method="post" action="/panel/enable-cut-group">
+                  <input type="hidden" name="group_jid" value="{group_jid}">
+                  <input type="hidden" name="view" value="{esc(view)}">
+                  <button class="btn btn-cut-on" type="submit">Activar corte</button>
+                </form>
+                """
+            else:
+                cut_action_html = f"""
+                <form class="action-form" method="post" action="/panel/disable-cut-group">
+                  <input type="hidden" name="group_jid" value="{group_jid}">
+                  <input type="hidden" name="view" value="{esc(view)}">
+                  <button class="btn btn-cut-off" type="submit">Quitar corte</button>
+                </form>
+                """
+
+            action_html = f"""
+            <div class="actions-stack">
+              {block_action_html}
+              {cut_action_html}
+            </div>
+            """
+
             html += f"""
                 <tr>
                   <td data-label="Grupo">
                     <div class="group-name">{esc(r["group_name"])}</div>
-                    <div class="group-id">{esc(r["group_jid"])}</div>
+                    <div class="group-id">{group_jid}</div>
                   </td>
                   <td data-label="Estado">{status_html}</td>
+                  <td data-label="Corte">{cut_html}</td>
                   <td data-label="Total" class="right"><span class="badge total-badge">{esc(r["total"])}</span></td>
                   <td data-label="RFC_IDCIF" class="right"><span class="badge">{esc(r["ok_rfc_idcif"])}</span></td>
                   <td data-label="QR" class="right"><span class="badge">{esc(r["ok_qr"])}</span></td>
                   <td data-label="CURP" class="right"><span class="badge">{esc(r["ok_curp"])}</span></td>
                   <td data-label="RFC_solo" class="right"><span class="badge">{esc(r["ok_rfc_only"])}</span></td>
                   <td data-label="Actualizado"><span class="muted">{esc(r["updated_at"])}</span></td>
-                  <td data-label="Acción">{action_html}</td>
+                  <td data-label="Acciones">{action_html}</td>
                 </tr>
             """
     else:
         html += """
             <tr>
-              <td colspan="9" class="empty">Sin actividad en este periodo.</td>
+              <td colspan="10" class="empty">Sin actividad en este periodo.</td>
             </tr>
         """
 
