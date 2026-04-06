@@ -1,4 +1,4 @@
-import os
+    import os
 import re
 import hashlib
 import traceback
@@ -931,6 +931,18 @@ def _panel_week_start(dt=None):
 def _panel_week_end(dt=None):
     return _panel_week_start(dt) + timedelta(days=7)
 
+def _panel_month_start(dt=None):
+    dt = dt or _panel_now()
+    return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+def _panel_month_end(dt=None):
+    dt = dt or _panel_now()
+    if dt.month == 12:
+        next_month = dt.replace(year=dt.year+1, month=1, day=1)
+    else:
+        next_month = dt.replace(month=dt.month+1, day=1)
+    return next_month.replace(hour=0, minute=0, second=0, microsecond=0)
+
 def _daterange_days(start_dt, end_dt):
     days = []
     cur = start_dt
@@ -1060,6 +1072,12 @@ def _panel_load_week_rows():
     days = _daterange_days(start, end)
     return _panel_load_rows_for_days(days)
 
+def _panel_load_month_rows():
+    start = _panel_month_start()
+    end = _panel_month_end()
+    days = _daterange_days(start, end)
+    return _panel_load_rows_for_days(days)
+
 def _panel_summary(rows):
     return {
         "day": _panel_day_str(),
@@ -1139,9 +1157,9 @@ def _cut_stats_key_for_day(day: str, group_jid: str) -> str:
 def _period_days(view: str):
     view = (view or "day").strip().lower()
 
-    if view == "week":
-        start = _panel_week_start()
-        end = _panel_week_end()
+    if view == "month":
+        start = _panel_month_start()
+        end = _panel_month_end()
         return _daterange_days(start, end)
 
     return [_panel_day_str()]
@@ -1606,9 +1624,9 @@ def evolution_webhook():
 def panel_api_stats():
     view = _safe(request.args.get("view")).lower()
 
-    if view == "week":
-        rows = _panel_load_week_rows()
-        period = "week"
+    if view == "month":
+        rows = _panel_load_month_rows()
+        period = "month"
     else:
         rows = _panel_load_today_rows()
         period = "day"
@@ -1632,8 +1650,8 @@ def panel_disable_cut_group():
 
         disable_cut_group(group_jid)
 
-        if view == "week":
-            return redirect("/panel?view=week")
+        if view == "month":
+            return redirect("/panel?view=month")
         return redirect("/panel")
     except Exception as e:
         print("panel_disable_cut_group error:", repr(e), flush=True)
@@ -1651,8 +1669,8 @@ def panel_enable_cut_group():
 
         enable_cut_group(group_jid)
 
-        if view == "week":
-            return redirect("/panel?view=week")
+        if view == "month":
+            return redirect("/panel?view=month")
         return redirect("/panel")
     except Exception as e:
         print("panel_enable_cut_group error:", repr(e), flush=True)
@@ -1670,8 +1688,8 @@ def panel_block_group():
 
         block_group(group_jid)
 
-        if view == "week":
-            return redirect("/panel?view=week")
+        if view == "month":
+            return redirect("/panel?view=month")
         return redirect("/panel")
     except Exception as e:
         print("panel_block_group error:", repr(e), flush=True)
@@ -1689,8 +1707,8 @@ def panel_unblock_group():
 
         unblock_group(group_jid)
 
-        if view == "week":
-            return redirect("/panel?view=week")
+        if view == "month":
+            return redirect("/panel?view=month")
         return redirect("/panel")
     except Exception as e:
         print("panel_unblock_group error:", repr(e), flush=True)
@@ -2040,8 +2058,8 @@ def panel_cuts():
         view = "day"
     else:
         days = _period_days(view)
-        if view == "week":
-            subtitle = f"Historial semanal: {days[0]} a {days[-1]} ({PANEL_TZ})"
+        if view == "month":
+            subtitle = f"Historial mensual: {days[0]} a {days[-1]} ({PANEL_TZ})"
         else:
             subtitle = f"Corte diario: {_today_label_es()} ({PANEL_TZ})"
 
@@ -2251,7 +2269,7 @@ def panel_cuts():
       <div class="toolbar">
         <a href="/panel" class="tool-link">Panel</a>
         <a href="/panel/cuts?view=day" class="tool-link {'tool-link-active' if view == 'day' else ''}">Corte de hoy</a>
-        <a href="/panel/cuts?view=week" class="tool-link {'tool-link-active' if view == 'week' else ''}">Lunes a domingo</a>
+        <a href="/panel/cuts?view=month" class="tool-link {'tool-link-active' if view == 'month' else ''}">Mes actual</a>
       </div>
     </div>
 
@@ -2349,14 +2367,14 @@ def panel_cuts():
 def panel_stats():
     view = _safe(request.args.get("view")).lower()
 
-    if view == "week":
-        rows = _panel_load_week_rows()
-        title_period = "Semana actual"
-        week_start = _panel_week_start().strftime("%Y-%m-%d")
-        week_end = _panel_week_end().strftime("%Y-%m-%d")
-        subtitle = f"Corte semanal: {week_start} a {week_end} ({PANEL_TZ})"
+    if view == "month":
+        rows = _panel_load_month_rows()
+        title_period = "Mes actual"
+        month_start = _panel_month_start().strftime("%Y-%m-%d")
+        month_end = _panel_month_end().strftime("%Y-%m-%d")
+        subtitle = f"Corte mensual: {month_start} a {month_end} ({PANEL_TZ})"
         auto_reload = "false"
-        section_note = "Vista semanal"
+        section_note = "Vista mensual"
     else:
         rows = _panel_load_today_rows()
         title_period = "Hoy"
@@ -2855,8 +2873,8 @@ def panel_stats():
         {subtitle}
       </p>
       <div class="toolbar">
-        <a href="/panel" class="tool-link {'tool-link-active' if view != 'week' else ''}">Hoy</a>
-        <a href="/panel?view=week" class="tool-link {'tool-link-active' if view == 'week' else ''}">Semana actual</a>
+        <a href="/panel" class="tool-link {'tool-link-active' if view != 'month' else ''}">Hoy</a>
+        <a href="/panel?view=month" class="tool-link {'tool-link-active' if view == 'month' else ''}">Mes actual</a>
         <a href="/panel/cuts?view=day" class="tool-link">Historial cortes</a>
       </div>
     </section>
