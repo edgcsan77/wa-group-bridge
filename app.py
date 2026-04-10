@@ -196,6 +196,47 @@ NO_CORTE_GROUPS = {
     "120363401473888510@g.us",  # DOCIFY 4.4
 }
 
+GROUP_ALIASES_KEY = "group_aliases"
+
+def get_group_alias(group_jid: str) -> str:
+    try:
+        if not group_jid:
+            return ""
+        val = redis_conn.hget(GROUP_ALIASES_KEY, group_jid)
+        if isinstance(val, bytes):
+            return val.decode("utf-8", errors="ignore").strip()
+        return (val or "").strip()
+    except Exception as e:
+        print("get_group_alias error:", repr(e), flush=True)
+        return ""
+
+def set_group_alias(group_jid: str, alias: str):
+    try:
+        if not group_jid:
+            return
+        alias = _safe(alias)
+        if alias:
+            redis_conn.hset(GROUP_ALIASES_KEY, group_jid, alias)
+        else:
+            redis_conn.hdel(GROUP_ALIASES_KEY, group_jid)
+    except Exception as e:
+        print("set_group_alias error:", repr(e), flush=True)
+
+def resolve_group_name(group_jid: str, fallback_name: str = "") -> str:
+    alias = get_group_alias(group_jid)
+    if alias:
+        return alias
+
+    static_name = GROUP_NAME_MAP.get(group_jid)
+    if static_name:
+        return static_name
+
+    fallback_name = _safe(fallback_name)
+    if fallback_name:
+        return fallback_name
+
+    return group_jid or ""
+
 # =========================
 # BLOQUEO DE GRUPOS
 # =========================
@@ -996,7 +1037,7 @@ def _panel_load_rows_for_days(days):
             raw = {_to_str(k): _to_str(v) for k, v in raw.items()}
 
             group_jid = raw.get("group_jid") or key_s.split(":group:", 1)[-1]
-            group_name = GROUP_NAME_MAP.get(group_jid) or raw.get("group_name") or group_jid
+            group_name = resolve_group_name(group_jid, raw.get("group_name"))
 
             if group_jid not in rows_map:
                 rows_map[group_jid] = {
@@ -1030,7 +1071,7 @@ def _panel_load_rows_for_days(days):
         if group_jid not in rows_map:
             rows_map[group_jid] = {
                 "group_jid": group_jid,
-                "group_name": group_name,
+                "group_name": resolve_group_name(group_jid, group_name),
                 "total": 0,
                 "ok_rfc_idcif_qr": 0,
                 "ok_rfc_clon": 0,
@@ -1047,7 +1088,7 @@ def _panel_load_rows_for_days(days):
         if group_jid not in rows_map:
             rows_map[group_jid] = {
                 "group_jid": group_jid,
-                "group_name": GROUP_NAME_MAP.get(group_jid) or group_jid,
+                "group_name": resolve_group_name(group_jid),
                 "total": 0,
                 "ok_rfc_idcif_qr": 0,
                 "ok_rfc_clon": 0,
@@ -1175,7 +1216,7 @@ def _load_cut_rows_for_days(days):
             raw = {_to_str(k): _to_str(v) for k, v in raw.items()}
 
             group_jid = raw.get("group_jid") or key_s.split(":group:", 1)[-1]
-            group_name = GROUP_NAME_MAP.get(group_jid) or raw.get("group_name") or group_jid
+            group_name = resolve_group_name(group_jid, raw.get("group_name"))
 
             count_clon = _safe_int(raw.get("count_clon"))
             count_idcif = _safe_int(raw.get("count_idcif"))
@@ -1218,7 +1259,7 @@ def _load_cut_rows_for_days(days):
 
 def _load_cut_detail_for_group(group_jid: str, days):
     prices = _get_group_prices(group_jid)
-    group_name = GROUP_NAME_MAP.get(group_jid) or group_jid
+    group_name = resolve_group_name(group_jid)
     detail = []
 
     total_clon = 0
@@ -1498,7 +1539,7 @@ def evolution_webhook():
         from_me = msg["from_me"]
         text = msg["text"]
         push_name = msg["push_name"] or "Usuario"
-        group_name = GROUP_NAME_MAP.get(remote_jid) or msg.get("group_name") or remote_jid
+        group_name = resolve_group_name(remote_jid, msg.get("group_name"))
 
         print("[GROUP NAME FINAL BEFORE JOB]", repr(group_name), flush=True)
         print("[REMOTE JID]", repr(remote_jid), flush=True)
@@ -1714,6 +1755,54 @@ def panel_unblock_group():
         print("panel_unblock_group error:", repr(e), flush=True)
         traceback.print_exc()
         return "error desbloqueando grupo", 500
+
+@app.post("/panel/set-group-name")
+def panel_set_group_name():
+    try:
+        group_jid = _safe(request.form.get("group_jid"))
+        group_name = _safe(request.form.get("group_name"))
+        view = _safe(request.form.get("view")).lower()
+
+        if not group_jid:
+            return "group_jid requerido", 400
+
+        set_group_alias(group_jid, group_name)
+
+        if view == "month":
+            return redirect("/panel?view=month")
+        return redirect("/panel")
+    except Exception as e:
+        print("panel_set_group_name error:", repr(e), flush=True)
+        traceback.print_exc()
+        return "error guardando nombre del grupo", 500
+
+@app.post("/panel/ping-group")
+def panel_ping_group():
+    try:
+        group_jid = _safe(request.form.get("group_jid"))
+        view = _safe(request.form.get("view")).lower()
+
+        if not group_jid:
+            return "group_jid requerido", 400
+
+        group_name = resolve_group_name(group_jid)
+
+        evolution_send_text(
+            group_jid=group_jid,
+            text=(
+                "📍 *PING DE GRUPO*\n\n"
+                f"Nombre: {group_name}\n"
+                f"JID: {group_jid}"
+            )
+        )
+
+        if view == "month":
+            return redirect("/panel?view=month")
+        return redirect("/panel")
+    except Exception as e:
+        print("panel_ping_group error:", repr(e), flush=True)
+        traceback.print_exc()
+        return "error enviando ping al grupo", 500
 
 @app.get("/panel/api/cuts")
 def panel_api_cuts():
@@ -2742,9 +2831,35 @@ def panel_stats():
       flex-direction: column;
       gap: 8px;
     }}
+
+    .action-form input[type="text"] {{
+      width: 100%;
+      min-width: 180px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font-size: .85rem;
+      background: white;
+      color: var(--text);
+    }}
+    
+    .btn-ping {{
+      background: #7c3aed;
+      color: white;
+    }}
+    
+    .btn-save {{
+      background: #0891b2;
+      color: white;
+    }}
     
     @media (max-width: 720px) {{
       .btn {{
+        width: 100%;
+      }}
+    
+      .action-form input[type="text"] {{
+        min-width: 0;
         width: 100%;
       }}
     }}
@@ -2925,7 +3040,7 @@ def panel_stats():
               <th class="right">CURP</th>
               <th class="right">RFC_solo</th>
               <th>Actualizado</th>
-              <th>Acción</th>
+              <th>Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -2983,10 +3098,29 @@ def panel_stats():
                 </form>
                 """
 
+            ping_action_html = f"""
+            <form class="action-form" method="post" action="/panel/ping-group">
+              <input type="hidden" name="group_jid" value="{group_jid}">
+              <input type="hidden" name="view" value="{esc(view)}">
+              <button class="btn btn-ping" type="submit">Ping grupo</button>
+            </form>
+            """
+
+            rename_action_html = f"""
+            <form class="action-form" method="post" action="/panel/set-group-name">
+              <input type="hidden" name="group_jid" value="{group_jid}">
+              <input type="hidden" name="view" value="{esc(view)}">
+              <input type="text" name="group_name" value="{esc(r["group_name"])}" placeholder="Nombre del grupo">
+              <button class="btn btn-save" type="submit">Guardar nombre</button>
+            </form>
+            """
+
             action_html = f"""
             <div class="actions-stack">
               {block_action_html}
               {cut_action_html}
+              {ping_action_html}
+              {rename_action_html}
             </div>
             """
 
