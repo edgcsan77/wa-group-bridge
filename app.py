@@ -2829,28 +2829,99 @@ def panel_stats():
     .actions-stack {{
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 10px;
+      min-width: 240px;
     }}
-
-    .action-form input[type="text"] {{
-      width: 100%;
-      min-width: 180px;
-      padding: 8px 10px;
+    
+    .actions-row {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }}
+    
+    .action-form {{
+      margin: 0;
+    }}
+    
+    .rename-form {{
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }}
+    
+    .rename-form input[type="text"] {{
+      flex: 1;
+      min-width: 0;
+      padding: 7px 9px;
       border: 1px solid var(--line);
-      border-radius: 10px;
-      font-size: .85rem;
-      background: white;
+      border-radius: 8px;
+      font-size: .82rem;
+      background: #fff;
       color: var(--text);
     }}
     
+    .btn {{
+      border: none;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: .78rem;
+      line-height: 1;
+      white-space: nowrap;
+      transition: all .15s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,.05);
+    }}
+    
+    .btn:hover {{
+      transform: translateY(-1px);
+      opacity: .95;
+    }}
+    
+    .btn-block {{
+      background: #ef4444;
+      color: white;
+    }}
+    
+    .btn-unblock {{
+      background: #16a34a;
+      color: white;
+    }}
+    
+    .btn-cut-on {{
+      background: #2563eb;
+      color: white;
+    }}
+    
+    .btn-cut-off {{
+      background: #f97316;
+      color: white;
+    }}
+    
     .btn-ping {{
-      background: #7c3aed;
+      background: #6366f1;
       color: white;
     }}
     
     .btn-save {{
-      background: #0891b2;
+      background: #0ea5a4;
       color: white;
+    }}
+    
+    @media (max-width: 720px) {{
+      .actions-stack {{
+        min-width: 0;
+      }}
+    
+      .actions-row,
+      .rename-form {{
+        flex-direction: column;
+      }}
+    
+      .btn,
+      .rename-form input[type="text"] {{
+        width: 100%;
+      }}
     }}
     
     @media (max-width: 720px) {{
@@ -3039,8 +3110,8 @@ def panel_stats():
               <th class="right">QR</th>
               <th class="right">CURP</th>
               <th class="right">RFC_solo</th>
-              <th>Actualizado</th>
-              <th>Acciones</th>
+              <th style="width:150px">Actualizado</th>
+              <th style="width:260px">Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -3107,19 +3178,21 @@ def panel_stats():
             """
 
             rename_action_html = f"""
-            <form class="action-form" method="post" action="/panel/set-group-name">
+            <form class="action-form rename-form" method="post" action="/panel/set-group-name">
               <input type="hidden" name="group_jid" value="{group_jid}">
               <input type="hidden" name="view" value="{esc(view)}">
-              <input type="text" name="group_name" value="{esc(r["group_name"])}" placeholder="Nombre del grupo">
-              <button class="btn btn-save" type="submit">Guardar nombre</button>
+              <input type="text" name="group_name" value="{esc(r["group_name"])}" placeholder="Nombre">
+              <button class="btn btn-save" type="submit">Guardar</button>
             </form>
             """
-
+            
             action_html = f"""
             <div class="actions-stack">
-              {block_action_html}
-              {cut_action_html}
-              {ping_action_html}
+              <div class="actions-row">
+                {ping_action_html}
+                {block_action_html}
+                {cut_action_html}
+              </div>
               {rename_action_html}
             </div>
             """
