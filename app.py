@@ -243,6 +243,7 @@ def resolve_group_name(group_jid: str, fallback_name: str = "") -> str:
 BLOCKED_GROUPS_KEY = "blocked_groups"
 
 NO_CORTE_GROUPS_KEY = "no_corte_groups"
+GROUP_PRICES_KEY_PREFIX = "group_prices"
 
 def get_no_corte_groups() -> set:
     try:
@@ -1185,7 +1186,36 @@ def _day_name_es(day_str: str) -> str:
     dt = datetime.strptime(day_str, "%Y-%m-%d")
     return DAYS_ES[dt.weekday()]
 
+def _group_prices_key(group_jid: str) -> str:
+    return f"{GROUP_PRICES_KEY_PREFIX}:{group_jid}"
+
+def set_group_prices(group_jid: str, clon: float, idcif: float):
+    try:
+        if not group_jid:
+            return
+        redis_conn.hset(
+            _group_prices_key(group_jid),
+            mapping={
+                "clon": round(_safe_float(clon), 2),
+                "idcif": round(_safe_float(idcif), 2),
+            }
+        )
+    except Exception as e:
+        print("set_group_prices error:", repr(e), flush=True)
+
 def _get_group_prices(group_jid: str):
+    try:
+        raw = redis_conn.hgetall(_group_prices_key(group_jid)) or {}
+        raw = {_to_str(k): _to_str(v) for k, v in raw.items()}
+
+        if raw:
+            return {
+                "clon": _safe_float(raw.get("clon"), DEFAULT_PRICES["clon"]),
+                "idcif": _safe_float(raw.get("idcif"), DEFAULT_PRICES["idcif"]),
+            }
+    except Exception as e:
+        print("_get_group_prices redis error:", repr(e), flush=True)
+
     p = GROUP_PRICES.get(group_jid) or DEFAULT_PRICES
     return {
         "clon": _safe_float(p.get("clon"), DEFAULT_PRICES["clon"]),
@@ -1845,6 +1875,32 @@ def panel_send_daily_cut_group():
         traceback.print_exc()
         return "error enviando corte del grupo", 500
 
+@app.post("/panel/update-group-prices")
+def panel_update_group_prices():
+    try:
+        group_jid = _safe(request.form.get("group_jid"))
+        view = _safe(request.form.get("view")).lower() or "day"
+        day_param = _safe(request.form.get("day"))
+
+        clon = _safe_float(request.form.get("clon"))
+        idcif = _safe_float(request.form.get("idcif"))
+
+        if not group_jid:
+            return "group_jid requerido", 400
+
+        set_group_prices(group_jid, clon, idcif)
+
+        url = f"/panel/cuts?view={view}&group_jid={group_jid}"
+        if day_param:
+            url += f"&day={day_param}"
+
+        return redirect(url)
+
+    except Exception as e:
+        print("panel_update_group_prices error:", repr(e), flush=True)
+        traceback.print_exc()
+        return "error actualizando precios", 500
+
 @app.post("/panel/send-daily-cuts")
 def panel_send_daily_cuts():
     try:
@@ -2161,6 +2217,35 @@ def panel_cuts():
         detail = _load_cut_detail_for_group(group_jid, days)
         totals = detail["totals"]
 
+        price_form = f"""
+            <div style="background:white; border-radius:18px; box-shadow:0 8px 24px rgba(15,23,42,.08); padding:16px; margin-bottom:16px;">
+              <form method="post" action="/panel/update-group-prices" style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+                <input type="hidden" name="group_jid" value="{esc(detail["group_jid"])}">
+                <input type="hidden" name="view" value="{esc(view)}">
+                <input type="hidden" name="day" value="{esc(day_param)}">
+        
+                <div>
+                  <label style="display:block; margin-bottom:6px; font-weight:700;">Precio clon</label>
+                  <input type="number" step="0.01" min="0" name="clon" value="{esc(detail["price_clon"])}"
+                         style="padding:10px 12px; border:1px solid #cbd5e1; border-radius:10px;">
+                </div>
+        
+                <div>
+                  <label style="display:block; margin-bottom:6px; font-weight:700;">Precio idcif</label>
+                  <input type="number" step="0.01" min="0" name="idcif" value="{esc(detail["price_idcif"])}"
+                         style="padding:10px 12px; border:1px solid #cbd5e1; border-radius:10px;">
+                </div>
+        
+                <div>
+                  <button type="submit"
+                          style="border:none; border-radius:10px; padding:10px 14px; font-weight:700; cursor:pointer; background:#2563eb; color:white;">
+                    Guardar precios
+                  </button>
+                </div>
+              </form>
+            </div>
+        """
+
         html = f"""
 <!doctype html>
 <html lang="es">
@@ -2217,7 +2302,9 @@ def panel_cuts():
       <h2 style="margin:10px 0 6px;">{esc(detail["group_name"])}</h2>
       <div>{esc(subtitle)}</div>
     </div>
-
+    
+    {price_form}
+    
     <div class="box">
       <table>
         <thead>
