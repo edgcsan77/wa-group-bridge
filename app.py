@@ -2600,6 +2600,7 @@ def panel_cuts():
 @app.get("/panel")
 def panel_stats():
     view = _safe(request.args.get("view")).lower()
+    search = _safe(request.args.get("search")).lower()
 
     if view == "month":
         rows = _panel_load_month_rows()
@@ -3204,6 +3205,17 @@ def panel_stats():
         {subtitle}
       </p>
       <div class="toolbar">
+        <form method="get" style="display:flex; gap:8px; align-items:center;">
+          <input type="hidden" name="view" value="{esc(view)}">
+          <input
+            type="text"
+            name="search"
+            placeholder="Buscar grupo..."
+            value="{esc(search)}"
+            style="padding:8px 10px;border-radius:8px;border:1px solid #cbd5e1;"
+          >
+          <button class="btn btn-save" type="submit">Buscar</button>
+        </form>
         <a href="/panel" class="tool-link {'tool-link-active' if view != 'month' else ''}">Hoy</a>
         <a href="/panel?view=month" class="tool-link {'tool-link-active' if view == 'month' else ''}">Mes actual</a>
         <a href="/panel/cuts?view=day" class="tool-link">Historial cortes</a>
@@ -3264,6 +3276,14 @@ def panel_stats():
 
     if rows:
         for r in rows:
+    
+            if search:
+                name = (r.get("group_name") or "").lower()
+                jid = (r.get("group_jid") or "").lower()
+    
+                if search not in name and search not in jid:
+                    continue
+                    
             group_jid = esc(r["group_jid"])
             blocked = bool(r.get("blocked"))
             no_corte = r["group_jid"] in no_corte_groups
