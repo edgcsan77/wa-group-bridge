@@ -2502,7 +2502,7 @@ def panel_cuts():
 
       <div class="toolbar">
         <a href="/panel" class="tool-link">Panel</a>
-        <a href="/panel/cuts?view=day" class="tool-link {'tool-link-active' if view == 'day' else ''}">Corte de hoy</a>
+        <a href="/panel/cuts?view=day" class="tool-link {'tool-link-active' if view == 'day' else ''}">Hoy</a>
         <a href="/panel/cuts?view=month" class="tool-link {'tool-link-active' if view == 'month' else ''}">Mes actual</a>
       </div>
     </div>
