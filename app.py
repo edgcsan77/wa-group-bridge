@@ -1298,7 +1298,14 @@ def _load_cut_detail_for_group(group_jid: str, days):
     total_sub_idcif = 0.0
     total_general = 0.0
 
-    for day in days:
+    week_clon = 0
+    week_idcif = 0
+    week_sub_clon = 0.0
+    week_sub_idcif = 0.0
+    week_total = 0.0
+    week_start = None
+
+    for i, day in enumerate(days):
         raw = redis_conn.hgetall(_cut_stats_key_for_day(day, group_jid)) or {}
         raw = {_to_str(k): _to_str(v) for k, v in raw.items()}
 
@@ -1312,15 +1319,12 @@ def _load_cut_detail_for_group(group_jid: str, days):
         subtotal_idcif = round(count_idcif * prices["idcif"], 2)
         total = round(subtotal_clon + subtotal_idcif, 2)
 
-        total_clon += count_clon
-        total_idcif += count_idcif
-        total_sub_clon += subtotal_clon
-        total_sub_idcif += subtotal_idcif
-        total_general += total
+        day_name = _day_name_es(day)
 
         detail.append({
+            "is_cut": False,
             "date": day,
-            "day_name": _day_name_es(day),
+            "day_name": day_name,
             "count_clon": count_clon,
             "count_idcif": count_idcif,
             "price_clon": prices["clon"],
@@ -1329,6 +1333,45 @@ def _load_cut_detail_for_group(group_jid: str, days):
             "subtotal_idcif": subtotal_idcif,
             "total": total,
         })
+
+        total_clon += count_clon
+        total_idcif += count_idcif
+        total_sub_clon += subtotal_clon
+        total_sub_idcif += subtotal_idcif
+        total_general += total
+
+        if week_start is None:
+            week_start = day
+
+        week_clon += count_clon
+        week_idcif += count_idcif
+        week_sub_clon += subtotal_clon
+        week_sub_idcif += subtotal_idcif
+        week_total += total
+
+        is_last_day = i == len(days) - 1
+
+        if day_name == "DOMINGO" or is_last_day:
+            detail.append({
+                "is_cut": True,
+                "label": "CORTE SEMANAL",
+                "from_date": week_start,
+                "to_date": day,
+                "week_clon": week_clon,
+                "week_idcif": week_idcif,
+                "price_clon": prices["clon"],
+                "price_idcif": prices["idcif"],
+                "week_sub_clon": round(week_sub_clon, 2),
+                "week_sub_idcif": round(week_sub_idcif, 2),
+                "week_total": round(week_total, 2),
+            })
+
+            week_clon = 0
+            week_idcif = 0
+            week_sub_clon = 0.0
+            week_sub_idcif = 0.0
+            week_total = 0.0
+            week_start = None
 
     return {
         "group_jid": group_jid,
@@ -2324,19 +2367,34 @@ def panel_cuts():
         """
 
         for r in detail["rows"]:
-            html += f"""
-          <tr>
-            <td>{esc(r["day_name"])}</td>
-            <td>{esc(r["date"])}</td>
-            <td class="right">{esc(r["count_clon"])}</td>
-            <td class="right">{esc(r["count_idcif"])}</td>
-            <td class="right">${esc(_fmt_money(r["price_clon"]))}</td>
-            <td class="right">${esc(_fmt_money(r["price_idcif"]))}</td>
-            <td class="right">${esc(_fmt_money(r["subtotal_clon"]))}</td>
-            <td class="right">${esc(_fmt_money(r["subtotal_idcif"]))}</td>
-            <td class="right">${esc(_fmt_money(r["total"]))}</td>
-          </tr>
-            """
+            if r.get("is_cut"):
+                html += f"""
+                  <tr style="background:#dbeafe; font-weight:700;">
+                    <td>{esc(r["label"])}</td>
+                    <td>{esc(r["from_date"])} a {esc(r["to_date"])}</td>
+                    <td class="right">{esc(r["week_clon"])}</td>
+                    <td class="right">{esc(r["week_idcif"])}</td>
+                    <td class="right">${esc(_fmt_money(r["price_clon"]))}</td>
+                    <td class="right">${esc(_fmt_money(r["price_idcif"]))}</td>
+                    <td class="right">${esc(_fmt_money(r["week_sub_clon"]))}</td>
+                    <td class="right">${esc(_fmt_money(r["week_sub_idcif"]))}</td>
+                    <td class="right">${esc(_fmt_money(r["week_total"]))}</td>
+                  </tr>
+                """
+            else:
+                html += f"""
+                  <tr>
+                    <td>{esc(r["day_name"])}</td>
+                    <td>{esc(r["date"])}</td>
+                    <td class="right">{esc(r["count_clon"])}</td>
+                    <td class="right">{esc(r["count_idcif"])}</td>
+                    <td class="right">${esc(_fmt_money(r["price_clon"]))}</td>
+                    <td class="right">${esc(_fmt_money(r["price_idcif"]))}</td>
+                    <td class="right">${esc(_fmt_money(r["subtotal_clon"]))}</td>
+                    <td class="right">${esc(_fmt_money(r["subtotal_idcif"]))}</td>
+                    <td class="right">${esc(_fmt_money(r["total"]))}</td>
+                  </tr>
+                """
 
         html += f"""
           <tr class="total-row">
