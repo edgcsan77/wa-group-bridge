@@ -197,6 +197,111 @@ NO_CORTE_GROUPS = {
 }
 
 GROUP_ALIASES_KEY = "group_aliases"
+DYNAMIC_ALLOWED_GROUPS_KEY = "dynamic_allowed_groups"
+
+def get_dynamic_allowed_groups() -> set:
+    try:
+        vals = redis_conn.smembers(DYNAMIC_ALLOWED_GROUPS_KEY) or set()
+        out = set()
+        for v in vals:
+            if isinstance(v, bytes):
+                out.add(v.decode("utf-8", errors="ignore"))
+            else:
+                out.add(str(v))
+        return out
+    except Exception as e:
+        print("get_dynamic_allowed_groups error:", repr(e), flush=True)
+        return set()
+
+def add_allowed_group(group_jid: str):
+    try:
+        if group_jid:
+            redis_conn.sadd(DYNAMIC_ALLOWED_GROUPS_KEY, group_jid)
+    except Exception as e:
+        print("add_allowed_group error:", repr(e), flush=True)
+
+def remove_allowed_group(group_jid: str):
+    try:
+        if group_jid:
+            redis_conn.srem(DYNAMIC_ALLOWED_GROUPS_KEY, group_jid)
+    except Exception as e:
+        print("remove_allowed_group error:", repr(e), flush=True)
+
+def is_group_allowed(group_jid: str) -> bool:
+    try:
+        if not group_jid:
+            return False
+
+        dynamic_groups = get_dynamic_allowed_groups()
+
+        # Si no hay restricciones configuradas, permitir todo
+        if not ALLOWED_GROUPS and not dynamic_groups:
+            return True
+
+        # Permitidos explícitos
+        if group_jid in ALLOWED_GROUPS or group_jid in dynamic_groups:
+            return True
+
+        # Compatibilidad con grupos viejos ya conocidos por el sistema
+        if is_legacy_known_group(group_jid):
+            return True
+
+        return False
+    except Exception as e:
+        print("is_group_allowed error:", repr(e), flush=True)
+        return False
+
+def is_legacy_known_group(group_jid: str) -> bool:
+    try:
+        if not group_jid:
+            return False
+
+        # 1) Si está en alias guardados, ya lo conocemos
+        alias = get_group_alias(group_jid)
+        if alias:
+            return True
+
+        # 2) Si está en bloqueados / no_corte, ya lo conocemos
+        if is_group_blocked(group_jid):
+            return True
+
+        if group_jid in get_no_corte_groups():
+            return True
+
+        # 3) Si ya tiene precios configurados, ya lo conocemos
+        raw_prices = redis_conn.hgetall(_group_prices_key(group_jid)) or {}
+        if raw_prices:
+            return True
+
+        # 4) Si ya existe en stats del panel o cuts, ya lo conocemos
+        for pattern in (
+            f"panel_stats:*:group:{group_jid}",
+            f"cut_stats:*:group:{group_jid}",
+        ):
+            for _ in redis_conn.scan_iter(match=pattern, count=1):
+                return True
+
+        return False
+    except Exception as e:
+        print("is_legacy_known_group error:", repr(e), flush=True)
+        return False
+
+def _parse_group_admin_command(text: str):
+    raw = _safe(text)
+    if not raw:
+        return {"ok": False, "command": "", "args": ""}
+
+    line = raw.strip()
+    lower = line.lower()
+
+    if lower == "/groupid":
+        return {"ok": True, "command": "groupid", "args": ""}
+
+    if lower.startswith("/addgroup"):
+        args = line[len("/addgroup"):].strip()
+        return {"ok": True, "command": "addgroup", "args": args}
+
+    return {"ok": False, "command": "", "args": ""}
 
 def get_group_alias(group_jid: str) -> str:
     try:
@@ -1100,6 +1205,23 @@ def _panel_load_rows_for_days(days):
                 "updated_at": "",
                 "blocked": True,
             }
+    
+    # incluir grupos permitidos dinámicamente aunque no tengan stats
+    for group_jid in get_dynamic_allowed_groups():
+        if group_jid not in rows_map:
+            rows_map[group_jid] = {
+                "group_jid": group_jid,
+                "group_name": resolve_group_name(group_jid),
+                "total": 0,
+                "ok_rfc_idcif_qr": 0,
+                "ok_rfc_clon": 0,
+                "ok_rfc_idcif": 0,
+                "ok_qr": 0,
+                "ok_curp": 0,
+                "ok_rfc_only": 0,
+                "updated_at": "",
+                "blocked": group_jid in blocked,
+            }
 
     rows = list(rows_map.values())
     rows.sort(key=lambda x: (x["blocked"], -x["total"], x["group_name"], x["group_jid"]))
@@ -1623,14 +1745,71 @@ def evolution_webhook():
         if is_group_blocked(remote_jid):
             return jsonify({"ok": True, "ignored": "group_blocked"}), 200
 
-        if ALLOWED_GROUPS and remote_jid not in ALLOWED_GROUPS:
-            return jsonify({"ok": True, "ignored": "group_not_allowed"}), 200
-
         if from_me:
             return jsonify({"ok": True, "ignored": "from_me"}), 200
 
         if not participant:
             return jsonify({"ok": True, "ignored": "no_participant"}), 200
+
+        admin_cmd = _parse_group_admin_command(text)
+
+        if admin_cmd["ok"]:
+            try:
+                if admin_cmd["command"] == "groupid":
+                    current_name = resolve_group_name(remote_jid, msg.get("group_name"))
+                    evolution_send_text(
+                        group_jid=remote_jid,
+                        text=(
+                            "📍 *DATOS DEL GRUPO*\n\n"
+                            f"Nombre: {current_name or 'SIN NOMBRE'}\n"
+                            f"JID: {remote_jid}"
+                        )
+                    )
+                    return jsonify({
+                        "ok": True,
+                        "handled": "groupid",
+                        "group_jid": remote_jid
+                    }), 200
+
+                if admin_cmd["command"] == "addgroup":
+                    alias = _safe(admin_cmd.get("args"))
+                    detected_name = resolve_group_name(remote_jid, msg.get("group_name"))
+
+                    add_allowed_group(remote_jid)
+
+                    if alias:
+                        set_group_alias(remote_jid, alias)
+                        final_name = alias
+                    else:
+                        # si no mandan alias, guardar el nombre detectado solo si existe
+                        if detected_name and detected_name != remote_jid:
+                            set_group_alias(remote_jid, detected_name)
+                        final_name = resolve_group_name(remote_jid, msg.get("group_name"))
+
+                    evolution_send_text(
+                        group_jid=remote_jid,
+                        text=(
+                            "✅ *GRUPO AGREGADO*\n\n"
+                            f"Nombre: {final_name or 'SIN NOMBRE'}\n"
+                            f"JID: {remote_jid}\n\n"
+                            "Este grupo ya quedó autorizado."
+                        )
+                    )
+                    return jsonify({
+                        "ok": True,
+                        "handled": "addgroup",
+                        "group_jid": remote_jid,
+                        "group_name": final_name
+                    }), 200
+
+            except Exception as e:
+                print("admin group command error:", repr(e), flush=True)
+                traceback.print_exc()
+                return jsonify({
+                    "ok": True,
+                    "handled": False,
+                    "error": str(e)
+                }), 200
 
         dedupe_key = f"dedupe:{EVOLUTION_INSTANCE}:{msg_id}"
         if not _redis_setnx_ttl(dedupe_key, 600):
