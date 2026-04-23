@@ -2449,6 +2449,10 @@ def panel_cuts():
       border:none; border-radius:10px; padding:9px 12px; font-weight:700; cursor:pointer;
       background:#2563eb; color:white;
     }}
+    .btn-save {{
+      background: #0ea5a4;
+      color: white;
+    }}
     .btn-green {{ background:#16a34a; }}
     .inline-form {{ margin:0; display:inline-block; }}
 
@@ -2511,7 +2515,7 @@ def panel_cuts():
             value="{esc(search)}"
             style="padding:8px 10px;border-radius:8px;border:1px solid #cbd5e1;"
           >
-          <button class="btn" type="submit">Buscar</button>
+          <button class="btn btn-save" type="submit">Buscar</button>
         </form>
     
         <a href="/panel" class="tool-link">Panel</a>
