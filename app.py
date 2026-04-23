@@ -199,6 +199,12 @@ NO_CORTE_GROUPS = {
 GROUP_ALIASES_KEY = "group_aliases"
 DYNAMIC_ALLOWED_GROUPS_KEY = "dynamic_allowed_groups"
 
+ADMIN_NUMBERS = {
+    "5218994588342",
+    "5218991131427",
+    "5217555592077",
+}
+
 def get_dynamic_allowed_groups() -> set:
     try:
         vals = redis_conn.smembers(DYNAMIC_ALLOWED_GROUPS_KEY) or set()
@@ -1753,7 +1759,7 @@ def evolution_webhook():
 
         admin_cmd = _parse_group_admin_command(text)
 
-        if admin_cmd["ok"]:
+        if admin_cmd["ok"] and requester_number in ADMIN_NUMBERS:
             try:
                 if admin_cmd["command"] == "groupid":
                     current_name = resolve_group_name(remote_jid, msg.get("group_name"))
