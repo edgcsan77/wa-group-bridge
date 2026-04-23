@@ -1757,9 +1757,16 @@ def evolution_webhook():
         if not participant:
             return jsonify({"ok": True, "ignored": "no_participant"}), 200
 
+        requester_number = _normalize_phone(
+            participant.replace("@s.whatsapp.net", "").replace("@lid", "")
+        )
+
         admin_cmd = _parse_group_admin_command(text)
 
-        if admin_cmd["ok"] and requester_number in ADMIN_NUMBERS:
+        if admin_cmd["ok"]:
+            if requester_number not in ADMIN_NUMBERS:
+                return jsonify({"ok": True, "ignored": "not_admin"}), 200
+                
             try:
                 if admin_cmd["command"] == "groupid":
                     current_name = resolve_group_name(remote_jid, msg.get("group_name"))
@@ -1858,9 +1865,6 @@ def evolution_webhook():
         
         query = parsed.get("query")
 
-        requester_number = _normalize_phone(
-            participant.replace("@s.whatsapp.net", "").replace("@lid", "")
-        )
         requester_label = (push_name or "Usuario").strip()
 
         if query:
