@@ -2446,8 +2446,16 @@ def panel_cuts():
     th {{ background:#0f172a; color:white; }}
     .right {{ text-align:right; }}
     .btn {{
-      border:none; border-radius:10px; padding:9px 12px; font-weight:700; cursor:pointer;
-      background:#2563eb; color:white;
+      border: none;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: .78rem;
+      line-height: 1;
+      white-space: nowrap;
+      transition: all .15s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,.05);
     }}
     .btn-save {{
       background: #0ea5a4;
