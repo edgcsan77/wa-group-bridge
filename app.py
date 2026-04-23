@@ -2239,6 +2239,7 @@ def panel_cuts():
     view = _safe(request.args.get("view")).lower() or "day"
     group_jid = _safe(request.args.get("group_jid"))
     day_param = _safe(request.args.get("day"))
+    search = _safe(request.args.get("search")).lower()
 
     if day_param:
         days = [day_param]
@@ -2501,6 +2502,18 @@ def panel_cuts():
       <div>{esc(subtitle)}</div>
 
       <div class="toolbar">
+        <form method="get" style="display:flex; gap:8px; align-items:center;">
+          <input type="hidden" name="view" value="{esc(view)}">
+          <input
+            type="text"
+            name="search"
+            placeholder="Buscar grupo..."
+            value="{esc(search)}"
+            style="padding:8px 10px;border-radius:8px;border:1px solid #cbd5e1;"
+          >
+          <button class="btn" type="submit">Buscar</button>
+        </form>
+    
         <a href="/panel" class="tool-link">Panel</a>
         <a href="/panel/cuts?view=day" class="tool-link {'tool-link-active' if view == 'day' else ''}">Hoy</a>
         <a href="/panel/cuts?view=month" class="tool-link {'tool-link-active' if view == 'month' else ''}">Mes actual</a>
@@ -2558,8 +2571,15 @@ def panel_cuts():
           <tbody>
     """
 
-    if rows:
+    if rows:        
         for r in rows:
+        
+            if search:
+                name = (r.get("group_name") or "").lower()
+                jid = (r.get("group_jid") or "").lower()
+            
+                if search not in name and search not in jid:
+                    continue
             html += f"""
             <tr>
               <td>{esc(r["group_name"])}<br><span style="color:#64748b; font-size:.82rem;">{esc(r["group_jid"])}</span></td>
