@@ -1811,6 +1811,9 @@ def evolution_webhook():
                     "error": str(e)
                 }), 200
 
+        if not is_group_allowed(remote_jid):
+            return jsonify({"ok": True, "ignored": "group_not_allowed"}), 200
+
         dedupe_key = f"dedupe:{EVOLUTION_INSTANCE}:{msg_id}"
         if not _redis_setnx_ttl(dedupe_key, 600):
             return jsonify({"ok": True, "ignored": "duplicate"}), 200
