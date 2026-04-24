@@ -433,6 +433,18 @@ def get_blocked_groups() -> set:
 def _safe(v):
     return (v or "").strip() if isinstance(v, str) else (str(v).strip() if v is not None else "")
 
+def _payload_instance(payload: dict) -> str:
+    inst = _safe(payload.get("instance"))
+    if inst:
+        return inst
+
+    data = payload.get("data") or {}
+    inst = _safe(data.get("instance"))
+    if inst:
+        return inst
+
+    return EVOLUTION_INSTANCE
+
 def _normalize_phone(v: str) -> str:
     return re.sub(r"\D+", "", v or "")
 
@@ -1541,7 +1553,9 @@ def _build_cut_message(group_name: str, date_label: str, count_clon: int, price_
         f"Agradecemos su preferencia"
     )
 
-def send_daily_cut_for_group(group_jid: str, day_str: str = None):
+def send_daily_cut_for_group(group_jid: str, day_str: str = None, instance_name=None):
+    instance_name = _safe(instance_name) or EVOLUTION_INSTANCE
+
     if is_group_no_corte(group_jid):
         return {
             "ok": False,
@@ -1575,7 +1589,11 @@ def send_daily_cut_for_group(group_jid: str, day_str: str = None):
         total=_safe_float(target["total"]),
     )
 
-    evolution_send_text(group_jid=group_jid, text=msg)
+    evolution_send_text(
+        group_jid=group_jid,
+        text=msg,
+        instance_name=instance_name
+    )
 
     return {
         "ok": True,
@@ -1583,9 +1601,12 @@ def send_daily_cut_for_group(group_jid: str, day_str: str = None):
         "group_name": target["group_name"],
         "day": day_str,
         "total": _safe_float(target["total"]),
+        "instance_name": instance_name,
     }
 
-def send_daily_cuts(day_str: str = None):
+def send_daily_cuts(day_str: str = None, instance_name=None):
+    instance_name = _safe(instance_name) or EVOLUTION_INSTANCE
+
     day_str = (day_str or _panel_day_str()).strip()
     rows = _load_cut_rows_for_days([day_str])
 
@@ -1613,7 +1634,12 @@ def send_daily_cuts(day_str: str = None):
             total=_safe_float(r["total"]),
         )
 
-        evolution_send_text(group_jid=r["group_jid"], text=msg)
+        evolution_send_text(
+            group_jid=r["group_jid"],
+            text=msg,
+            instance_name=instance_name
+        )
+
         sent.append({
             "group_jid": r["group_jid"],
             "group_name": r["group_name"],
@@ -1625,6 +1651,7 @@ def send_daily_cuts(day_str: str = None):
         "day": day_str,
         "sent": sent,
         "skipped": skipped,
+        "instance_name": instance_name,
     }
 
 def _extract_evolution_message(payload: dict):
@@ -1698,8 +1725,10 @@ def evolution_headers():
         "Content-Type": "application/json",
     }
 
-def evolution_send_text(group_jid=None, number=None, text=""):
-    url = f"{EVOLUTION_BASE_URL}/message/sendText/{EVOLUTION_INSTANCE}"
+def evolution_send_text(group_jid=None, number=None, text="", instance_name=None):
+    instance_name = _safe(instance_name) or EVOLUTION_INSTANCE
+
+    url = f"{EVOLUTION_BASE_URL}/message/sendText/{instance_name}"
     payload = {"text": text}
 
     if group_jid:
@@ -1708,6 +1737,7 @@ def evolution_send_text(group_jid=None, number=None, text=""):
         payload["number"] = number
 
     r = requests.post(url, json=payload, headers=evolution_headers(), timeout=60)
+    print("sendText instance:", instance_name, flush=True)
     print("sendText payload:", payload, flush=True)
     print("sendText resp:", r.status_code, r.text, flush=True)
     r.raise_for_status()
@@ -1729,6 +1759,9 @@ def evolution_webhook():
 
         payload = request.get_json(silent=True) or {}
         print("EVOLUTION WEBHOOK:", payload, flush=True)
+
+        instance_name = _payload_instance(payload)
+        print("[EVOLUTION INSTANCE]", repr(instance_name), flush=True)
 
         msg = _extract_evolution_message(payload)
 
@@ -1776,7 +1809,8 @@ def evolution_webhook():
                             "📍 *DATOS DEL GRUPO*\n\n"
                             f"Nombre: {current_name or 'SIN NOMBRE'}\n"
                             f"JID: {remote_jid}"
-                        )
+                        ),
+                        instance_name=instance_name
                     )
                     return jsonify({
                         "ok": True,
@@ -1806,7 +1840,8 @@ def evolution_webhook():
                             f"Nombre: {final_name or 'SIN NOMBRE'}\n"
                             f"JID: {remote_jid}\n\n"
                             "Este grupo ya quedó autorizado."
-                        )
+                        ),
+                        instance_name=instance_name
                     )
                     return jsonify({
                         "ok": True,
@@ -1827,7 +1862,7 @@ def evolution_webhook():
         if not is_group_allowed(remote_jid):
             return jsonify({"ok": True, "ignored": "group_not_allowed"}), 200
 
-        dedupe_key = f"dedupe:{EVOLUTION_INSTANCE}:{msg_id}"
+        dedupe_key = f"dedupe:{instance_name}:{msg_id}"
         if not _redis_setnx_ttl(dedupe_key, 600):
             return jsonify({"ok": True, "ignored": "duplicate"}), 200
 
@@ -1852,7 +1887,8 @@ def evolution_webhook():
                 try:
                     evolution_send_text(
                         group_jid=remote_jid,
-                        text=parsed.get("error") or _format_input_error()
+                        text=parsed.get("error") or _format_input_error(),
+                        instance_name=instance_name
                     )
                 except Exception as e:
                     print("validation sendText error:", repr(e), flush=True)
@@ -1876,16 +1912,17 @@ def evolution_webhook():
             f"{remote_jid}|{requester_number}|{normalized_query}".encode("utf-8")
         ).hexdigest()
 
-        inflight_key = f"inflight:{EVOLUTION_INSTANCE}:{command_key}"
+        inflight_key = f"inflight:{instance_name}:{command_key}"
         if not _redis_setnx_ttl(inflight_key, 300):
             return jsonify({"ok": True, "ignored": "already_processing"}), 200
 
-        ack_key = f"ack:{EVOLUTION_INSTANCE}:{msg_id}"
+        ack_key = f"ack:{instance_name}:{msg_id}"
         if _redis_setnx_ttl(ack_key, 300):
             try:
                 evolution_send_text(
                     group_jid=remote_jid,
-                    text=f"🚀 DOCU EXPRES\nSolicitud recibida de {requester_label}.\nEsto puede tardar unos minutos..."
+                    text=f"🚀 DOCU EXPRES\nSolicitud recibida de {requester_label}.\nEsto puede tardar unos minutos...",
+                    instance_name=instance_name
                 )
             except Exception as e:
                 print("group ack error:", repr(e), flush=True)
@@ -1904,6 +1941,7 @@ def evolution_webhook():
             "mime_type": mime_type,
             "bot_internal_url": BOT_INTERNAL_URL,
             "bot_internal_token": BOT_INTERNAL_TOKEN,
+            "evolution_instance": instance_name,
         }
 
         task_queue.enqueue(
@@ -2162,8 +2200,10 @@ def reset_cron():
         "deleted": [key_morning, key_cuts]
     }
 
-def evolution_send_image_to_group(group_jid: str, media_url: str, file_name: str = "aviso.jpg", caption: str = ""):
-    url = f"{EVOLUTION_BASE_URL}/message/sendMedia/{EVOLUTION_INSTANCE}"
+def evolution_send_image_to_group(group_jid: str, media_url: str, file_name: str = "aviso.jpg", caption: str = "", instance_name=None):
+    instance_name = _safe(instance_name) or EVOLUTION_INSTANCE
+
+    url = f"{EVOLUTION_BASE_URL}/message/sendMedia/{instance_name}"
     payload = {
         "number": group_jid,
         "mediatype": "image",
@@ -2173,12 +2213,15 @@ def evolution_send_image_to_group(group_jid: str, media_url: str, file_name: str
     }
 
     r = requests.post(url, json=payload, headers=evolution_headers(), timeout=120)
+    print("sendImage instance:", instance_name, flush=True)
     print("sendImage payload:", payload, flush=True)
     print("sendImage resp:", r.status_code, r.text, flush=True)
     r.raise_for_status()
     return r.json()
 
-def send_image_to_one_group(group_jid: str, image_url: str, file_name: str = "aviso.jpg", caption: str = ""):
+def send_image_to_one_group(group_jid: str, image_url: str, file_name: str = "aviso.jpg", caption: str = "", instance_name=None):
+    instance_name = _safe(instance_name) or EVOLUTION_INSTANCE
+
     if not group_jid:
         return {"ok": False, "error": "group_jid vacío"}
 
@@ -2191,11 +2234,13 @@ def send_image_to_one_group(group_jid: str, image_url: str, file_name: str = "av
             media_url=image_url,
             file_name=file_name,
             caption=caption,
+            instance_name=instance_name,
         )
         return {
             "ok": True,
             "group_jid": group_jid,
             "group_name": GROUP_NAME_MAP.get(group_jid) or group_jid,
+            "instance_name": instance_name,
         }
     except Exception as e:
         print("send_image_to_one_group error:", group_jid, repr(e), flush=True)
@@ -2204,6 +2249,7 @@ def send_image_to_one_group(group_jid: str, image_url: str, file_name: str = "av
             "group_jid": group_jid,
             "group_name": GROUP_NAME_MAP.get(group_jid) or group_jid,
             "error": str(e),
+            "instance_name": instance_name,
         }
 
 @app.post("/panel/test-send-warning-and-cut")
@@ -2302,7 +2348,9 @@ def panel_test_send_warning_image():
         traceback.print_exc()
         return jsonify({"ok": False, "error": str(e)}), 500
 
-def send_image_to_all_groups(image_url: str, file_name: str = "aviso.jpg", caption: str = ""):
+def send_image_to_all_groups(image_url: str, file_name: str = "aviso.jpg", caption: str = "", instance_name=None):
+    instance_name = _safe(instance_name) or EVOLUTION_INSTANCE
+
     sent = []
     failed = []
 
@@ -2321,6 +2369,7 @@ def send_image_to_all_groups(image_url: str, file_name: str = "aviso.jpg", capti
                 media_url=image_url,
                 file_name=file_name,
                 caption=caption,
+                instance_name=instance_name,
             )
             sent.append(group_jid)
         except Exception as e:
@@ -2333,6 +2382,7 @@ def send_image_to_all_groups(image_url: str, file_name: str = "aviso.jpg", capti
     return {
         "sent": sent,
         "failed": failed,
+        "instance_name": instance_name,
     }
 
 @app.post("/cron/send-morning-image")
