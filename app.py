@@ -3531,7 +3531,6 @@ def panel_stats():
       </div>
     </section>
 
-    html += """
     <div class="section" style="margin-bottom:18px;">
       <div class="section-head">
         <h2 class="section-title">Agregar grupo manualmente</h2>
@@ -3560,7 +3559,6 @@ def panel_stats():
         </div>
       </div>
     </div>
-    """
     
     <section class="section">
       <div class="section-head">
