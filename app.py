@@ -1784,17 +1784,25 @@ def evolution_webhook():
         if is_group_blocked(remote_jid):
             return jsonify({"ok": True, "ignored": "group_blocked"}), 200
 
-        if from_me:
-            return jsonify({"ok": True, "ignored": "from_me"}), 200
-
-        if not participant:
+        if not participant and not payload.get("sender"):
             return jsonify({"ok": True, "ignored": "no_participant"}), 200
 
-        requester_number = _normalize_phone(
-            participant.replace("@s.whatsapp.net", "").replace("@lid", "")
-        )
-
         admin_cmd = _parse_group_admin_command(text)
+
+        requester_number = _normalize_phone(
+            (
+                payload.get("sender")
+                if from_me else participant
+            ) or ""
+        )
+        
+        print("ADMIN_DEBUG_FROM_ME =", from_me, flush=True)
+        print("ADMIN_DEBUG_PARTICIPANT =", participant, flush=True)
+        print("ADMIN_DEBUG_SENDER =", payload.get("sender"), flush=True)
+        print("ADMIN_DEBUG_REQUESTER =", requester_number, flush=True)
+        
+        if from_me and not admin_cmd["ok"]:
+            return jsonify({"ok": True, "ignored": "from_me"}), 200
 
         if admin_cmd["ok"]:
             if requester_number not in ADMIN_NUMBERS:
