@@ -2897,7 +2897,7 @@ def panel_stats():
         title_period = "Hoy"
         subtitle = f"Corte diario automático: {_panel_day_str()} (reinicio lógico a las 00:00:00, {PANEL_TZ})"
         auto_reload = "true"
-        section_note = "Actualización automática cada 30 segundos"
+        section_note = "Actualización automática cada 1 minuto"
 
     summary = _panel_summary(rows)
 
@@ -3475,7 +3475,7 @@ def panel_stats():
   </style>
   <script>
     if ({auto_reload}) {{
-      setTimeout(() => location.reload(), 30000);
+      setTimeout(() => location.reload(), 60000);
     }}
   </script>
 </head>
@@ -3531,6 +3531,37 @@ def panel_stats():
       </div>
     </section>
 
+    html += """
+    <div class="section" style="margin-bottom:18px;">
+      <div class="section-head">
+        <h2 class="section-title">Agregar grupo manualmente</h2>
+        <div class="section-note">Registra un grupo para este bot RFC</div>
+      </div>
+    
+      <div style="padding:16px;">
+        <div style="display:grid;grid-template-columns:1.4fr 1fr auto;gap:12px;align-items:end;">
+          <div>
+            <div class="small" style="margin-bottom:6px;">Group JID</div>
+            <input id="manual_group_jid" placeholder="1203634XXXXXXXXXX@g.us"
+              style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid #cbd5e1;">
+          </div>
+    
+          <div>
+            <div class="small" style="margin-bottom:6px;">Nombre del grupo</div>
+            <input id="manual_group_name" placeholder="Nombre visible del grupo"
+              style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid #cbd5e1;">
+          </div>
+    
+          <div>
+            <button class="btn btn-save" type="button" onclick="addManualRfcGroup()">
+              Agregar grupo
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+    
     <section class="section">
       <div class="section-head">
         <h2 class="section-title">Actividad por grupo</h2>
@@ -3674,10 +3705,68 @@ def panel_stats():
       </div>
     </section>
   </div>
+
+<script>
+    async function addManualRfcGroup() {
+      const groupJid = document.getElementById("manual_group_jid").value.trim();
+      const groupName = document.getElementById("manual_group_name").value.trim();
+    
+      if (!groupJid) {
+        alert("Falta el Group JID");
+        return;
+      }
+    
+      const formData = new FormData();
+      formData.append("group_jid", groupJid);
+      formData.append("group_name", groupName);
+    
+      const res = await fetch("/panel/add-manual-group", {
+        method: "POST",
+        body: formData
+      });
+    
+      const data = await res.json();
+    
+      if (data.ok) {
+        alert("Grupo agregado correctamente");
+        location.reload();
+      } else {
+        alert(data.error || "No se pudo agregar el grupo");
+      }
+    }
+</script>
 </body>
 </html>
     """
     return Response(html, mimetype="text/html")
+
+@app.post("/panel/add-manual-group")
+def panel_add_manual_group():
+    try:
+        group_jid = _safe(request.form.get("group_jid"))
+        group_name = _safe(request.form.get("group_name"))
+
+        if not group_jid:
+            return jsonify({"ok": False, "error": "Falta group_jid"}), 400
+
+        if not group_jid.endswith("@g.us"):
+            return jsonify({"ok": False, "error": "El JID debe terminar en @g.us"}), 400
+
+        add_allowed_group(group_jid)
+
+        if group_name:
+            set_group_alias(group_jid, group_name)
+
+        return jsonify({
+            "ok": True,
+            "group_jid": group_jid,
+            "group_name": group_name
+        })
+
+    except Exception as e:
+        print("panel_add_manual_group error:", repr(e), flush=True)
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
