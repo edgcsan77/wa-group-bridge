@@ -1921,7 +1921,7 @@ def evolution_webhook():
         ).hexdigest()
 
         inflight_key = f"inflight:{instance_name}:{command_key}"
-        if not _redis_setnx_ttl(inflight_key, 300):
+        if not _redis_setnx_ttl(inflight_key, 30):
             return jsonify({"ok": True, "ignored": "already_processing"}), 200
 
         ack_key = f"ack:{instance_name}:{msg_id}"
