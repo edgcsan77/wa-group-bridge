@@ -2905,6 +2905,20 @@ def panel_stats():
         subtitle = f"Corte mensual: {month_start} a {month_end} ({PANEL_TZ})"
         auto_reload = "false"
         section_note = "Vista mensual"
+
+    elif view == "prev_month":
+        start_current = _panel_month_start()
+        prev_ref = start_current - timedelta(days=1)
+
+        prev_start = _panel_month_start(prev_ref)
+        prev_end = _panel_month_end(prev_ref)
+
+        rows = _panel_load_rows_for_days(_daterange_days(prev_start, prev_end))
+        title_period = "Mes anterior"
+        subtitle = f"Corte mes anterior: {prev_start.strftime('%Y-%m-%d')} a {prev_end.strftime('%Y-%m-%d')} ({PANEL_TZ})"
+        auto_reload = "false"
+        section_note = "Vista mes anterior"
+
     else:
         rows = _panel_load_today_rows()
         title_period = "Hoy"
@@ -3513,6 +3527,7 @@ def panel_stats():
         </form>
         <a href="/panel" class="tool-link {'tool-link-active' if view != 'month' else ''}">Hoy</a>
         <a href="/panel?view=month" class="tool-link {'tool-link-active' if view == 'month' else ''}">Mes actual</a>
+        <a href="/panel?view=prev_month" class="tool-link {'tool-link-active' if view == 'prev_month' else ''}">Mes anterior</a>
         <a href="/panel/cuts?view=day" class="tool-link">Historial cortes</a>
       </div>
     </section>
