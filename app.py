@@ -2894,7 +2894,7 @@ def panel_cuts():
 
 @app.get("/panel")
 def panel_stats():
-    view = _safe(request.args.get("view")).lower()
+    view = _safe(request.args.get("view")).lower() or "day"
     search = _safe(request.args.get("search")).lower()
 
     if view == "month":
@@ -3525,7 +3525,7 @@ def panel_stats():
           >
           <button class="btn btn-save" type="submit">Buscar</button>
         </form>
-        <a href="/panel" class="tool-link {'tool-link-active' if view != 'month' else ''}">Hoy</a>
+        <a href="/panel?view=day" class="tool-link {'tool-link-active' if view == 'day' else ''}">Hoy</a>
         <a href="/panel?view=month" class="tool-link {'tool-link-active' if view == 'month' else ''}">Mes actual</a>
         <a href="/panel?view=prev_month" class="tool-link {'tool-link-active' if view == 'prev_month' else ''}">Mes anterior</a>
         <a href="/panel/cuts?view=day" class="tool-link">Historial cortes</a>
