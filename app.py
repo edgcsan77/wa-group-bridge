@@ -1366,6 +1366,25 @@ def _period_days(view: str):
         end = _panel_month_end()
         return _daterange_days(start, end)
 
+    if view == "prev_month":
+        now = _panel_now()
+
+        if now.month == 1:
+            prev = now.replace(year=now.year - 1, month=12, day=1)
+        else:
+            prev = now.replace(month=now.month - 1, day=1)
+
+        start = prev.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        if prev.month == 12:
+            end = prev.replace(year=prev.year + 1, month=1, day=1)
+        else:
+            end = prev.replace(month=prev.month + 1, day=1)
+
+        end = end.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        return _daterange_days(start, end)
+
     return [_panel_day_str()]
 
 def _load_cut_rows_for_days(days):
@@ -2772,6 +2791,7 @@ def panel_cuts():
         <a href="/panel" class="tool-link">Panel</a>
         <a href="/panel/cuts?view=day" class="tool-link {'tool-link-active' if view == 'day' else ''}">Hoy</a>
         <a href="/panel/cuts?view=month" class="tool-link {'tool-link-active' if view == 'month' else ''}">Mes actual</a>
+        <a href="/panel/cuts?view=prev_month" class="tool-link {'tool-link-active' if view == 'prev_month' else ''}">Mes anterior</a>
       </div>
     </div>
 
