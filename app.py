@@ -1958,6 +1958,7 @@ def evolution_webhook():
             "query_type": parsed.get("type") if not is_media_candidate else msg_type,
             "msg_type": msg_type,
             "media_id": media_id,
+            "msg_id": msg_id,
             "mime_type": mime_type,
             "bot_internal_url": BOT_INTERNAL_URL,
             "bot_internal_token": BOT_INTERNAL_TOKEN,
