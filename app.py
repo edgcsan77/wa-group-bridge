@@ -703,6 +703,28 @@ def _parse_command(text: str):
     idcif_pattern = r"\d{11}"
     lugar_pattern = r"[A-ZÁÉÍÓÚÜÑ\s]+,\s*[A-ZÁÉÍÓÚÜÑ\s]+"
 
+    m_curp_plus_any = re.match(
+        rf"^\s*({curp_pattern})(?:\s+|$)(.*)$",
+        upper_raw_clean,
+        flags=re.I | re.S
+    )
+
+    if m_curp_plus_any:
+        curp = m_curp_plus_any.group(1).strip().upper()
+        rest = (m_curp_plus_any.group(2) or "").strip()
+
+        if rest:
+            query_final = f"{curp} {rest}".strip()
+        else:
+            query_final = curp
+
+        return {
+            "ok": True,
+            "type": "curp",
+            "query": query_final,
+            "error": None
+        }
+
     raw_lines = [re.sub(r"\s+", " ", line).strip().upper() for line in raw.splitlines()]
     raw_lines = [line for line in raw_lines if line]
     
