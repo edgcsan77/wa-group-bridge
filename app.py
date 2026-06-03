@@ -2009,19 +2009,32 @@ def evolution_webhook():
 
 @app.get("/panel/api/stats")
 def panel_api_stats():
-    view = _safe(request.args.get("view")).lower()
+    view = _safe(request.args.get("view")).lower() or "day"
 
     if view == "month":
         rows = _panel_load_month_rows()
         period = "month"
+
+    elif view == "prev_month":
+        start_current = _panel_month_start()
+        prev_ref = start_current - timedelta(days=1)
+
+        prev_start = _panel_month_start(prev_ref)
+        prev_end = _panel_month_end(prev_ref)
+
+        rows = _panel_load_rows_for_days(_daterange_days(prev_start, prev_end))
+        period = "prev_month"
+
     else:
         rows = _panel_load_today_rows()
         period = "day"
 
     summary = _panel_summary(rows)
+
     return jsonify({
         "ok": True,
-        "view": period,
+        "period": period,
+        "view": view,
         "summary": summary,
         "rows": rows,
     }), 200
@@ -2532,8 +2545,17 @@ def panel_cuts():
         view = "day"
     else:
         days = _period_days(view)
+
         if view == "month":
-            subtitle = f"Historial mensual: {days[0]} a {days[-1]} ({PANEL_TZ})"
+            subtitle = f"Historial mes actual: {days[0]} a {days[-1]} ({PANEL_TZ})"
+
+        elif view == "prev_month":
+            end_label = (
+                datetime.strptime(days[-1], "%Y-%m-%d") + timedelta(days=1)
+            ).strftime("%Y-%m-%d") if days else ""
+
+            subtitle = f"Historial mes anterior: {days[0]} a {end_label} ({PANEL_TZ})"
+
         else:
             subtitle = f"Corte diario: {_today_label_es()} ({PANEL_TZ})"
 
