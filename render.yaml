@@ -16,6 +16,14 @@ services:
         sync: false
       - key: EVOLUTION_INSTANCE
         sync: false
+      - key: IDCIF_RECEIVE_INSTANCE
+        sync: false
+      - key: RFC_RESPONSE_INSTANCE
+        sync: false
+      - key: IDCIF_PROVIDER_GROUP
+        sync: false
+      - key: IDCIF_PENDING_TTL_SEC
+        value: "1800"
       - key: EVOLUTION_WEBHOOK_SECRET
         sync: false
       - key: BOT_INTERNAL_URL
