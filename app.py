@@ -9,6 +9,7 @@ from redis import Redis
 from rq import Queue
 
 import json
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,24 @@ EVOLUTION_BASE_URL = os.getenv("EVOLUTION_BASE_URL", "").rstrip("/")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "").strip()
 EVOLUTION_INSTANCE = os.getenv("EVOLUTION_INSTANCE", "").strip()
 EVOLUTION_WEBHOOK_SECRET = os.getenv("EVOLUTION_WEBHOOK_SECRET", "").strip()
+
+# =========================
+# BOT PUENTE IDCIF
+# =========================
+# Instancia nueva que SOLO recibe solicitudes IDCIF y habla con la proveedora.
+IDCIF_RECEIVE_INSTANCE = os.getenv("IDCIF_RECEIVE_INSTANCE", "").strip()
+
+# Instancia actual que debe responder al cliente con el PDF o avisos.
+# En tu caso normalmente será grupo02.
+RFC_RESPONSE_INSTANCE = os.getenv("RFC_RESPONSE_INSTANCE", EVOLUTION_INSTANCE).strip()
+
+# Grupo donde está la proveedora + bot IDCIF nuevo.
+IDCIF_PROVIDER_GROUP = os.getenv("IDCIF_PROVIDER_GROUP", "").strip()
+
+# Tiempo que se guarda una solicitud pendiente esperando IDCIF.
+IDCIF_PENDING_TTL_SEC = int(os.getenv("IDCIF_PENDING_TTL_SEC", "1800") or "1800")
+
+IDCIF_PENDING_PREFIX = "idcif_pending"
 
 GROUP_COMMAND = os.getenv("GROUP_COMMAND", "/csf").strip()
 
@@ -1780,6 +1799,478 @@ def evolution_send_text(group_jid=None, number=None, text="", instance_name=None
 def _redis_setnx_ttl(key: str, ttl: int) -> bool:
     return bool(redis_conn.set(key, "1", ex=ttl, nx=True))
 
+# =========================
+# FLUJO PUENTE IDCIF
+# =========================
+
+IDCIF_CURP_RE = re.compile(r"\b[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d\b", re.I)
+IDCIF_RFC_RE = re.compile(r"\b[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}\b", re.I)
+IDCIF_IDCIF_RE = re.compile(r"\b\d{11}\b")
+
+IDCIF_NO_PATTERNS = (
+    "NO HAY IDCIF",
+    "SIN IDCIF",
+    "NO TIENE IDCIF",
+    "NO SE ENCONTRO IDCIF",
+    "NO SE ENCONTRÓ IDCIF",
+    "NO LOCALIZADO",
+    "NO LOCALIZADA",
+    "NO ENCONTRADO",
+    "NO ENCONTRADA",
+    "SIN REGISTRO",
+    "SIN RESULTADO",
+)
+
+
+def _idcif_norm(text: str) -> str:
+    return re.sub(r"\s+", " ", _normalize_upper(text or "")).strip()
+
+
+def _idcif_pending_key(term: str) -> str:
+    term = _idcif_norm(term)
+    return f"{IDCIF_PENDING_PREFIX}:{term}"
+
+
+def _idcif_extract_curp(text: str) -> str:
+    m = IDCIF_CURP_RE.search(_normalize_upper(text or ""))
+    return m.group(0).upper() if m else ""
+
+
+def _idcif_extract_rfc(text: str) -> str:
+    m = IDCIF_RFC_RE.search(_normalize_upper(text or ""))
+    return m.group(0).upper() if m else ""
+
+
+def _idcif_extract_idcif(text: str) -> str:
+    m = IDCIF_IDCIF_RE.search(_normalize_upper(text or ""))
+    return m.group(0) if m else ""
+
+
+def _idcif_extract_request_term(text: str) -> tuple[str, str]:
+    """
+    Extrae CURP o RFC.
+    Prioridad CURP porque el usuario pidió que también acepte CURP.
+    """
+    curp = _idcif_extract_curp(text)
+    if curp:
+        return "CURP", curp
+
+    rfc = _idcif_extract_rfc(text)
+    if rfc:
+        return "RFC", rfc
+
+    return "", ""
+
+
+def _idcif_is_no_idcif(text: str) -> bool:
+    t = _idcif_norm(text)
+    return any(p in t for p in IDCIF_NO_PATTERNS)
+
+
+def _idcif_save_pending(term: str, data: dict):
+    term = _idcif_norm(term)
+    if not term:
+        return
+
+    key = _idcif_pending_key(term)
+    data = dict(data or {})
+    data["term"] = term
+    data["created_at"] = int(time.time())
+
+    redis_conn.set(
+        key,
+        json.dumps(data, ensure_ascii=False),
+        ex=IDCIF_PENDING_TTL_SEC,
+    )
+
+
+def _idcif_load_pending(term: str) -> dict | None:
+    term = _idcif_norm(term)
+    if not term:
+        return None
+
+    raw = redis_conn.get(_idcif_pending_key(term))
+    if not raw:
+        return None
+
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="ignore")
+
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _idcif_delete_pending(term: str):
+    term = _idcif_norm(term)
+    if term:
+        redis_conn.delete(_idcif_pending_key(term))
+
+
+def _idcif_pop_pending(term: str) -> dict | None:
+    data = _idcif_load_pending(term)
+    if data:
+        _idcif_delete_pending(term)
+    return data
+
+
+def _idcif_scan_single_pending() -> tuple[str, dict] | tuple[str, None]:
+    """
+    Fallback: si la proveedora responde solo RFC+IDCIF, pero la solicitud original era CURP,
+    no siempre podemos empatar por término. Si hay UNA sola pendiente, la usamos.
+    Si hay varias, no adivinamos.
+    """
+    found = []
+
+    try:
+        for key in redis_conn.scan_iter(f"{IDCIF_PENDING_PREFIX}:*"):
+            raw_key = key.decode("utf-8", errors="ignore") if isinstance(key, bytes) else str(key)
+            raw = redis_conn.get(key)
+
+            if not raw:
+                continue
+
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="ignore")
+
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    found.append((raw_key, data))
+            except Exception:
+                continue
+
+    except Exception as e:
+        print("IDCIF_SCAN_PENDING_ERROR =", repr(e), flush=True)
+        return "", None
+
+    if len(found) == 1:
+        key, data = found[0]
+        redis_conn.delete(key)
+        return key, data
+
+    return "", None
+
+
+def _idcif_pop_pending_from_provider_text(text: str) -> tuple[str, dict | None]:
+    """
+    Intenta empatar respuesta de proveedora contra pendiente:
+    - por CURP si viene CURP
+    - por RFC si viene RFC
+    - si no empata y solo hay una pendiente, usa esa única pendiente
+    """
+    terms = []
+
+    curp = _idcif_extract_curp(text)
+    rfc = _idcif_extract_rfc(text)
+
+    if curp:
+        terms.append(curp)
+    if rfc and rfc not in terms:
+        terms.append(rfc)
+
+    for term in terms:
+        pending = _idcif_pop_pending(term)
+        if pending:
+            return term, pending
+
+    single_key, single_pending = _idcif_scan_single_pending()
+    if single_pending:
+        return single_key, single_pending
+
+    return "", None
+
+
+def _idcif_send_to_client(client_group: str, text: str):
+    """
+    Todo lo que vea el cliente debe salir por el bot RFC actual.
+    """
+    return evolution_send_text(
+        group_jid=client_group,
+        text=text,
+        instance_name=RFC_RESPONSE_INSTANCE,
+    )
+
+
+def _idcif_send_to_provider(text: str):
+    """
+    Todo lo que vaya a la proveedora debe salir por el bot IDCIF nuevo.
+    """
+    return evolution_send_text(
+        group_jid=IDCIF_PROVIDER_GROUP,
+        text=text,
+        instance_name=IDCIF_RECEIVE_INSTANCE,
+    )
+
+
+def _idcif_enqueue_generation(pending: dict, query: str, provider_msg_id: str = ""):
+    """
+    Reusa la cola normal constancia_jobs.
+    worker_jobs.py ya manda a constancia-backend-rfc y envía PDF por evolution_instance.
+    """
+    client_group = (pending.get("client_group") or "").strip()
+    requester_number = (pending.get("requester_number") or "").strip()
+    requester_name = (pending.get("requester_name") or "").strip()
+    requester_label = (pending.get("requester_label") or "Usuario").strip()
+    group_name = (pending.get("group_name") or client_group).strip()
+    original_text = (pending.get("original_text") or query).strip()
+    original_msg_id = (pending.get("msg_id") or "").strip()
+
+    job_data = {
+        "requester_number": requester_number,
+        "requester_name": requester_name,
+        "requester_label": requester_label,
+        "group_jid": client_group,
+        "group_name": group_name,
+        "original_text": original_text,
+        "query": query,
+        "query_type": "rfc_idcif",
+        "msg_type": "text",
+        "media_id": "",
+        "msg_id": f"idcif:{original_msg_id}:{provider_msg_id}",
+        "mime_type": "",
+        "bot_internal_url": BOT_INTERNAL_URL,
+        "bot_internal_token": BOT_INTERNAL_TOKEN,
+
+        # CLAVE: el PDF y avisos salen con el bot RFC actual, no con el bot IDCIF.
+        "evolution_instance": RFC_RESPONSE_INSTANCE,
+    }
+
+    task_queue.enqueue(
+        "worker_jobs.process_group_request_job",
+        job_data,
+        job_timeout=900,
+        result_ttl=3600,
+        failure_ttl=86400,
+    )
+
+
+def _handle_idcif_client_message(
+    remote_jid: str,
+    requester_number: str,
+    push_name: str,
+    group_name: str,
+    text: str,
+    msg_id: str,
+):
+    kind, term = _idcif_extract_request_term(text)
+
+    if not term:
+        _idcif_send_to_client(
+            remote_jid,
+            (
+                "⚠️ Formato no válido para IDCIF.\n\n"
+                "Envía solamente RFC o CURP.\n\n"
+                "Ejemplos:\n"
+                "ABC010203XYZ\n"
+                "GACG640211HOCLSD00"
+            ),
+        )
+        return {"ok": True, "handled": "idcif_client_invalid"}
+
+    if not IDCIF_PROVIDER_GROUP:
+        _idcif_send_to_client(
+            remote_jid,
+            "⚠️ No está configurado el grupo de la proveedora IDCIF.",
+        )
+        return {"ok": False, "handled": "idcif_provider_group_missing"}
+
+    _idcif_save_pending(term, {
+        "term": term,
+        "kind": kind,
+        "client_group": remote_jid,
+        "requester_number": requester_number,
+        "requester_name": push_name,
+        "requester_label": push_name or "Usuario",
+        "group_name": group_name,
+        "original_text": text,
+        "msg_id": msg_id,
+    })
+
+    # Aviso al cliente sale por el bot RFC actual.
+    _idcif_send_to_client(
+        remote_jid,
+        (
+            "⏳ *Solicitud IDCIF recibida*\n\n"
+            f"Dato: {term}\n"
+            "Estoy solicitando el IDCIF."
+        ),
+    )
+
+    # Solicitud a proveedora sale por el bot IDCIF nuevo.
+    _idcif_send_to_provider(
+        (
+            "🟡 *SOLICITUD IDCIF*\n\n"
+            f"Dato: {term}\n"
+            f"Tipo: {kind}\n"
+            f"Grupo cliente: {group_name or remote_jid}\n"
+            f"Solicitante: {push_name or requester_number}\n\n"
+            "Responder con:\n"
+            "RFC IDCIF\n\n"
+            "Si el dato enviado fue CURP, favor de responder con RFC + IDCIF.\n\n"
+            "Si no hay IDCIF:\n"
+            f"NO HAY IDCIF {term}"
+        )
+    )
+
+    return {
+        "ok": True,
+        "handled": "idcif_client_forwarded_to_provider",
+        "term": term,
+        "kind": kind,
+    }
+
+
+def _handle_idcif_provider_message(text: str, msg_id: str):
+    # Caso A: proveedora dice que no hay IDCIF.
+    if _idcif_is_no_idcif(text):
+        matched_term, pending = _idcif_pop_pending_from_provider_text(text)
+
+        if not pending:
+            print("IDCIF_NO_IDCIF_WITHOUT_PENDING =", {
+                "text": text,
+                "matched_term": matched_term,
+            }, flush=True)
+            return {"ok": True, "handled": "idcif_no_idcif_without_pending"}
+
+        client_group = pending.get("client_group") or ""
+        term = pending.get("term") or matched_term or _idcif_extract_rfc(text) or _idcif_extract_curp(text)
+
+        _idcif_send_to_client(
+            client_group,
+            (
+                "❌ *No se localizó IDCIF*\n\n"
+                f"Dato: {term}\n\n"
+                "No se generó constancia."
+            ),
+        )
+
+        return {
+            "ok": True,
+            "handled": "idcif_no_idcif_notified_client",
+            "term": term,
+        }
+
+    # Caso B: proveedora responde con IDCIF.
+    idcif = _idcif_extract_idcif(text)
+    if not idcif:
+        return {"ok": True, "handled": "idcif_provider_text_without_idcif"}
+
+    matched_term, pending = _idcif_pop_pending_from_provider_text(text)
+
+    if not pending:
+        print("IDCIF_PROVIDER_IDCIF_WITHOUT_PENDING =", {
+            "text": text,
+            "matched_term": matched_term,
+            "idcif": idcif,
+        }, flush=True)
+        return {"ok": True, "handled": "idcif_provider_idcif_without_pending"}
+
+    client_group = pending.get("client_group") or ""
+
+    # Para generar por IDCIF, constancia-backend-rfc necesita RFC + IDCIF.
+    # Si la proveedora mandó RFC, usamos ese RFC.
+    rfc_from_provider = _idcif_extract_rfc(text)
+
+    # Si la solicitud original fue RFC y la proveedora solo puso IDCIF, combinamos RFC pendiente + IDCIF.
+    pending_kind = (pending.get("kind") or "").upper()
+    pending_term = (pending.get("term") or "").strip().upper()
+
+    if rfc_from_provider:
+        query = f"RFC: {rfc_from_provider}\nIDCIF: {idcif}"
+    elif pending_kind == "RFC" and pending_term:
+        query = f"RFC: {pending_term}\nIDCIF: {idcif}"
+    else:
+        # Si era CURP y la proveedora solo responde CURP + IDCIF, no alcanza para RFC_IDCIF.
+        # Se le pide que mande RFC + IDCIF.
+        _idcif_send_to_client(
+            client_group,
+            (
+                "⚠️ Se recibió un IDCIF, pero falta el RFC para generar la constancia.\n\n"
+                f"Dato original: {pending_term}\n"
+                "Se pidió corrección a la proveedora."
+            ),
+        )
+
+        _idcif_send_to_provider(
+            (
+                "⚠️ Para generar la constancia necesito RFC + IDCIF.\n\n"
+                f"Dato original: {pending_term}\n"
+                f"IDCIF recibido: {idcif}\n\n"
+                "Responder en este formato:\n"
+                "RFC IDCIF"
+            )
+        )
+
+        # Volvemos a guardar pendiente para que la proveedora pueda corregir.
+        _idcif_save_pending(pending_term, pending)
+
+        return {
+            "ok": True,
+            "handled": "idcif_received_without_rfc_waiting_correction",
+            "term": pending_term,
+            "idcif": idcif,
+        }
+
+    _idcif_send_to_client(
+        client_group,
+        (
+            "✅ *IDCIF localizado*\n\n"
+            "Generando constancia..."
+        ),
+    )
+
+    _idcif_enqueue_generation(
+        pending=pending,
+        query=query,
+        provider_msg_id=msg_id,
+    )
+
+    return {
+        "ok": True,
+        "handled": "idcif_enqueued_generation",
+        "query": query,
+    }
+
+
+def _handle_idcif_bridge_message(
+    instance_name: str,
+    remote_jid: str,
+    requester_number: str,
+    push_name: str,
+    group_name: str,
+    text: str,
+    msg_type: str,
+    msg_id: str,
+):
+    """
+    Maneja SOLO el bot IDCIF nuevo.
+    """
+    if not IDCIF_RECEIVE_INSTANCE:
+        return {"ok": True, "handled": False, "ignored": "idcif_instance_not_configured"}
+
+    if instance_name != IDCIF_RECEIVE_INSTANCE:
+        return {"ok": True, "handled": False, "ignored": "not_idcif_instance"}
+
+    if msg_type != "text":
+        return {"ok": True, "handled": True, "ignored": "idcif_only_text"}
+
+    if remote_jid == IDCIF_PROVIDER_GROUP:
+        result = _handle_idcif_provider_message(text=text, msg_id=msg_id)
+        result["handled"] = result.get("handled") or "idcif_provider"
+        return result
+
+    return _handle_idcif_client_message(
+        remote_jid=remote_jid,
+        requester_number=requester_number,
+        push_name=push_name,
+        group_name=group_name,
+        text=text,
+        msg_id=msg_id,
+    )
+
 @app.get("/")
 def health():
     return jsonify({"ok": True, "service": "wa-group-bridge"}), 200
@@ -1902,7 +2393,17 @@ def evolution_webhook():
                 }), 200
 
         if not is_group_allowed(remote_jid):
-            return jsonify({"ok": True, "ignored": "group_not_allowed"}), 200
+            # El grupo de proveedora IDCIF puede no estar en ALLOWED_GROUPS,
+            # pero debe poder responderle al bot IDCIF.
+            is_idcif_provider_group = (
+                IDCIF_RECEIVE_INSTANCE
+                and instance_name == IDCIF_RECEIVE_INSTANCE
+                and IDCIF_PROVIDER_GROUP
+                and remote_jid == IDCIF_PROVIDER_GROUP
+            )
+        
+            if not is_idcif_provider_group:
+                return jsonify({"ok": True, "ignored": "group_not_allowed"}), 200
 
         dedupe_key = f"dedupe:{instance_name}:{msg_id}"
         if not _redis_setnx_ttl(dedupe_key, 600):
@@ -1911,6 +2412,23 @@ def evolution_webhook():
         msg_type = msg["msg_type"]
         media_id = msg["media_id"]
         mime_type = msg["mime_type"]
+
+        # =========================
+        # FLUJO ESPECIAL BOT IDCIF
+        # =========================
+        if IDCIF_RECEIVE_INSTANCE and instance_name == IDCIF_RECEIVE_INSTANCE:
+            result = _handle_idcif_bridge_message(
+                instance_name=instance_name,
+                remote_jid=remote_jid,
+                requester_number=requester_number,
+                push_name=push_name,
+                group_name=group_name,
+                text=text,
+                msg_type=msg_type,
+                msg_id=msg_id,
+            )
+        
+            return jsonify(result), 200
         
         # En texto, solo procesar si realmente parece consulta del bot
         if msg_type == "text" and not _is_text_candidate(text):
