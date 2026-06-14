@@ -44,6 +44,8 @@ ALLOWED_GROUPS = {
     x.strip() for x in (os.getenv("ALLOWED_GROUPS", "") or "").split(",") if x.strip()
 }
 
+LOAD_DEFAULT_GROUPS = (os.getenv("LOAD_DEFAULT_GROUPS", "1").strip() == "1")
+
 GROUP_NAME_MAP = {
     "120363407784035104@g.us": "VALLARTA",
     "120363424161924716@g.us": "DANIEL",
@@ -104,6 +106,9 @@ GROUP_NAME_MAP = {
     "120363421638731486@g.us": "DOCIFY 4.3 - BRANDON",
     "120363401473888510@g.us": "DOCIFY 4.4 - BRANDON",
 }
+
+if not LOAD_DEFAULT_GROUPS:
+    GROUP_NAME_MAP = {}
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 BOT_INTERNAL_URL = os.getenv("BOT_INTERNAL_URL", "").strip()
@@ -190,6 +195,9 @@ GROUP_PRICES = {
     "120363401473888510@g.us": {"clon": 7.00, "idcif": 0.00},  # DOCIFY 4.4
 }
 
+if not LOAD_DEFAULT_GROUPS:
+    GROUP_PRICES = {}
+
 NO_CORTE_GROUPS = {
     "120363425323721713@g.us",  # PRUEBA DOCIFY MX
     "120363424415085327@g.us",  # PADRON RFC 2026
@@ -207,6 +215,9 @@ NO_CORTE_GROUPS = {
     "120363424117651122@g.us",  # MAX ELIMINADO
     "120363409658465099@g.us",  # DIEGO
 }
+
+if not LOAD_DEFAULT_GROUPS:
+    NO_CORTE_GROUPS = set()
 
 GROUP_ALIASES_KEY = "group_aliases"
 DYNAMIC_ALLOWED_GROUPS_KEY = "dynamic_allowed_groups"
