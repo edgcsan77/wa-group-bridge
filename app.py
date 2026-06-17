@@ -226,6 +226,7 @@ ADMIN_NUMBERS = {
     "5218994588342",
     "5218991131427",
     "5217555592077",
+    "5219618280050",
 }
 
 def get_dynamic_allowed_groups() -> set:
