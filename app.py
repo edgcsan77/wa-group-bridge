@@ -2493,7 +2493,7 @@ def evolution_webhook():
             try:
                 evolution_send_text(
                     group_jid=remote_jid,
-                    text=f"🚀 DOCU EXPRES\nSolicitud recibida de {requester_label}.\nEsto puede tardar unos minutos...",
+                    text=f"👽 DOCIFY MX\nSolicitud recibida de {requester_label}.\nEsto puede tardar unos minutos...",
                     instance_name=instance_name
                 )
             except Exception as e:
