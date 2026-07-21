@@ -117,6 +117,29 @@ BOT_INTERNAL_TOKEN = os.getenv("BOT_INTERNAL_TOKEN", "").strip()
 redis_conn = Redis.from_url(REDIS_URL)
 task_queue = Queue("constancia_jobs", connection=redis_conn)
 
+REQUEST_INFLIGHT_TTL_SEC = int(
+    os.getenv("REQUEST_INFLIGHT_TTL_SEC", "1200") or "1200"
+)
+
+IDCIF_REQUEST_LOCK_TTL_SEC = int(
+    os.getenv("IDCIF_REQUEST_LOCK_TTL_SEC", "1800") or "1800"
+)
+
+
+def _idcif_request_lock_key(
+    client_group: str,
+    requester_number: str,
+    term: str,
+) -> str:
+    raw = (
+        f"{client_group}|"
+        f"{requester_number}|"
+        f"{_idcif_norm(term)}"
+    )
+
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return f"idcif_request_lock:{digest}"
+
 # =========================
 # CORTES / PRECIOS / CRON
 # =========================
@@ -303,15 +326,11 @@ def is_legacy_known_group(group_jid: str) -> bool:
         if raw_prices:
             return True
 
-        # 4) Si ya existe en stats del panel o cuts, ya lo conocemos
-        for pattern in (
-            f"panel_stats:*:group:{group_jid}",
-            f"cut_stats:*:group:{group_jid}",
-        ):
-            for _ in redis_conn.scan_iter(match=pattern, count=1):
-                return True
-
+        # No hacer SCAN de Redis dentro del webhook.
+        # Los grupos deben reconocerse por:
+        # alias, bloqueados, no-corte, precios o lista dinámica.
         return False
+        
     except Exception as e:
         print("is_legacy_known_group error:", repr(e), flush=True)
         return False
@@ -1790,23 +1809,95 @@ def evolution_headers():
         "Content-Type": "application/json",
     }
 
-def evolution_send_text(group_jid=None, number=None, text="", instance_name=None):
+def evolution_send_text(
+    group_jid=None,
+    number=None,
+    text="",
+    instance_name=None,
+    timeout=(3.05, 12),
+):
     instance_name = _safe(instance_name) or EVOLUTION_INSTANCE
 
-    url = f"{EVOLUTION_BASE_URL}/message/sendText/{instance_name}"
-    payload = {"text": text}
+    url = (
+        f"{EVOLUTION_BASE_URL}/message/sendText/"
+        f"{instance_name}"
+    )
+
+    payload = {
+        "text": text,
+    }
 
     if group_jid:
         payload["number"] = group_jid
     elif number:
         payload["number"] = number
+    else:
+        raise ValueError(
+            "evolution_send_text requiere group_jid o number"
+        )
 
-    r = requests.post(url, json=payload, headers=evolution_headers(), timeout=60)
-    print("sendText instance:", instance_name, flush=True)
-    print("sendText payload:", payload, flush=True)
-    print("sendText resp:", r.status_code, r.text, flush=True)
-    r.raise_for_status()
-    return r.json()
+    started_at = time.monotonic()
+
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            headers=evolution_headers(),
+            timeout=timeout,
+        )
+
+        elapsed = round(
+            time.monotonic() - started_at,
+            3,
+        )
+
+        print(
+            "[EVOLUTION SEND TEXT]",
+            {
+                "instance": instance_name,
+                "number": payload.get("number"),
+                "status": response.status_code,
+                "seconds": elapsed,
+            },
+            flush=True,
+        )
+
+        response.raise_for_status()
+        return response.json()
+
+    except requests.Timeout:
+        elapsed = round(
+            time.monotonic() - started_at,
+            3,
+        )
+
+        print(
+            "[EVOLUTION SEND TEXT TIMEOUT]",
+            {
+                "instance": instance_name,
+                "number": payload.get("number"),
+                "seconds": elapsed,
+            },
+            flush=True,
+        )
+
+        raise
+
+def evolution_send_ack_fast(
+    group_jid: str,
+    requester_label: str,
+    instance_name: str,
+):
+    return evolution_send_text(
+        group_jid=group_jid,
+        text=(
+            "👽 DOCIFY MX\n"
+            f"Solicitud recibida de {requester_label}.\n"
+            "Esto puede tardar unos minutos..."
+        ),
+        instance_name=instance_name,
+        timeout=(2.5, 8),
+    )
 
 def _redis_setnx_ttl(key: str, ttl: int) -> bool:
     return bool(redis_conn.set(key, "1", ex=ttl, nx=True))
@@ -1928,6 +2019,25 @@ def _idcif_pop_pending(term: str) -> dict | None:
     return data
 
 
+def _idcif_release_request_lock(pending: dict):
+    if not isinstance(pending, dict):
+        return
+
+    request_lock_key = (
+        pending.get("request_lock_key")
+        or ""
+    ).strip()
+
+    if request_lock_key:
+        redis_conn.delete(request_lock_key)
+
+        print(
+            "[IDCIF REQUEST LOCK RELEASED]",
+            request_lock_key,
+            flush=True,
+        )
+
+
 def _idcif_scan_single_pending() -> tuple[str, dict] | tuple[str, None]:
     """
     Fallback: si la proveedora responde solo RFC+IDCIF, pero la solicitud original era CURP,
@@ -2030,6 +2140,17 @@ def _idcif_enqueue_generation(pending: dict, query: str, provider_msg_id: str = 
     original_text = (pending.get("original_text") or query).strip()
     original_msg_id = (pending.get("msg_id") or "").strip()
 
+    request_raw = (
+        f"{RFC_RESPONSE_INSTANCE}|"
+        f"{client_group}|"
+        f"{requester_number}|"
+        f"{_normalize_upper(query)}"
+    )
+    
+    request_key = hashlib.sha256(
+        request_raw.encode("utf-8")
+    ).hexdigest()
+
     job_data = {
         "requester_number": requester_number,
         "requester_name": requester_name,
@@ -2045,18 +2166,40 @@ def _idcif_enqueue_generation(pending: dict, query: str, provider_msg_id: str = 
         "mime_type": "",
         "bot_internal_url": BOT_INTERNAL_URL,
         "bot_internal_token": BOT_INTERNAL_TOKEN,
-
-        # CLAVE: el PDF y avisos salen con el bot RFC actual, no con el bot IDCIF.
         "evolution_instance": RFC_RESPONSE_INSTANCE,
+        "request_key": request_key,
     }
 
-    task_queue.enqueue(
-        "worker_jobs.process_group_request_job",
-        job_data,
-        job_timeout=900,
-        result_ttl=3600,
-        failure_ttl=86400,
-    )
+    rq_job_id = f"idcif-generation:{request_key}"
+
+    try:
+        task_queue.enqueue(
+            "worker_jobs.process_group_request_job",
+            job_data,
+            job_id=rq_job_id,
+            job_timeout=900,
+            result_ttl=0,
+            failure_ttl=1200,
+        )
+    
+    except Exception as enqueue_err:
+        err_text = str(enqueue_err).lower()
+    
+        if (
+            "already exists" in err_text
+            or "duplicate" in err_text
+        ):
+            print(
+                "[IDCIF DUPLICATE GENERATION BLOCKED]",
+                rq_job_id,
+                repr(enqueue_err),
+                flush=True,
+            )
+            return False
+    
+        raise
+    
+    return True
 
 
 def _handle_idcif_client_message(
@@ -2082,12 +2225,43 @@ def _handle_idcif_client_message(
         )
         return {"ok": True, "handled": "idcif_client_invalid"}
 
+    idcif_request_lock = _idcif_request_lock_key(
+        remote_jid,
+        requester_number,
+        term,
+    )
+    
+    if not _redis_setnx_ttl(
+        idcif_request_lock,
+        IDCIF_REQUEST_LOCK_TTL_SEC,
+    ):
+        _idcif_send_to_client(
+            remote_jid,
+            (
+                "⏳ Esta solicitud IDCIF ya está en proceso.\n\n"
+                f"Dato: {term}\n"
+                "No es necesario volver a enviarla."
+            ),
+        )
+    
+        return {
+            "ok": True,
+            "handled": "idcif_duplicate_request_blocked",
+            "term": term,
+        }
+
     if not IDCIF_PROVIDER_GROUP:
+        redis_conn.delete(idcif_request_lock)
+    
         _idcif_send_to_client(
             remote_jid,
             "⚠️ No está configurado el grupo de la proveedora IDCIF.",
         )
-        return {"ok": False, "handled": "idcif_provider_group_missing"}
+    
+        return {
+            "ok": False,
+            "handled": "idcif_provider_group_missing",
+        }
 
     _idcif_save_pending(term, {
         "term": term,
@@ -2099,6 +2273,7 @@ def _handle_idcif_client_message(
         "group_name": group_name,
         "original_text": text,
         "msg_id": msg_id,
+        "request_lock_key": idcif_request_lock,
     })
 
     # Aviso al cliente sale por el bot RFC actual.
@@ -2112,20 +2287,45 @@ def _handle_idcif_client_message(
     )
 
     # Solicitud a proveedora sale por el bot IDCIF nuevo.
-    _idcif_send_to_provider(
-        (
-            "🟡 *SOLICITUD IDCIF*\n\n"
-            f"Dato: {term}\n"
-            f"Tipo: {kind}\n"
-            f"Grupo cliente: {group_name or remote_jid}\n"
-            f"Solicitante: {push_name or requester_number}\n\n"
-            "Responder con:\n"
-            "RFC IDCIF\n\n"
-            "Si el dato enviado fue CURP, favor de responder con RFC + IDCIF.\n\n"
-            "Si no hay IDCIF:\n"
-            f"NO HAY IDCIF {term}"
+    try:
+        _idcif_send_to_provider(
+            (
+                "🟡 *SOLICITUD IDCIF*\n\n"
+                f"Dato: {term}\n"
+                f"Tipo: {kind}\n"
+                f"Grupo cliente: {group_name or remote_jid}\n"
+                f"Solicitante: {push_name or requester_number}\n\n"
+                "Responder con:\n"
+                "RFC IDCIF\n\n"
+                "Si el dato enviado fue CURP, favor de responder con RFC + IDCIF.\n\n"
+                "Si no hay IDCIF:\n"
+                f"NO HAY IDCIF {term}"
+            )
         )
-    )
+    
+    except Exception as provider_send_err:
+        print(
+            "[IDCIF PROVIDER SEND ERROR]",
+            repr(provider_send_err),
+            flush=True,
+        )
+    
+        _idcif_delete_pending(term)
+        redis_conn.delete(idcif_request_lock)
+    
+        _idcif_send_to_client(
+            remote_jid,
+            (
+                "⚠️ No fue posible enviar la solicitud IDCIF "
+                "a la proveedora. Puedes intentarlo nuevamente."
+            ),
+        )
+    
+        return {
+            "ok": False,
+            "handled": "idcif_provider_send_failed",
+            "term": term,
+        }
 
     return {
         "ok": True,
@@ -2141,12 +2341,21 @@ def _handle_idcif_provider_message(text: str, msg_id: str):
         matched_term, pending = _idcif_pop_pending_from_provider_text(text)
 
         if not pending:
-            print("IDCIF_NO_IDCIF_WITHOUT_PENDING =", {
-                "text": text,
-                "matched_term": matched_term,
-            }, flush=True)
-            return {"ok": True, "handled": "idcif_no_idcif_without_pending"}
-
+            print(
+                "IDCIF_NO_IDCIF_WITHOUT_PENDING =",
+                {
+                    "text": text,
+                    "matched_term": matched_term,
+                },
+                flush=True,
+            )
+            return {
+                "ok": True,
+                "handled": "idcif_no_idcif_without_pending",
+            }
+        
+        _idcif_release_request_lock(pending)
+        
         client_group = pending.get("client_group") or ""
         term = pending.get("term") or matched_term or _idcif_extract_rfc(text) or _idcif_extract_curp(text)
 
@@ -2226,23 +2435,43 @@ def _handle_idcif_provider_message(text: str, msg_id: str):
             "idcif": idcif,
         }
 
-    _idcif_send_to_client(
-        client_group,
-        (
-            "✅ *IDCIF localizado*\n\n"
-            "Generando constancia..."
-        ),
-    )
-
-    _idcif_enqueue_generation(
+    enqueued = _idcif_enqueue_generation(
         pending=pending,
         query=query,
         provider_msg_id=msg_id,
     )
-
+    
+    if enqueued:
+        _idcif_release_request_lock(pending)
+    
+        _idcif_send_to_client(
+            client_group,
+            (
+                "✅ *IDCIF localizado*\n\n"
+                "Generando constancia..."
+            ),
+        )
+    
+        return {
+            "ok": True,
+            "handled": "idcif_enqueued_generation",
+            "query": query,
+        }
+    
+    print(
+        "[IDCIF GENERATION NOT ENQUEUED]",
+        {
+            "client_group": client_group,
+            "query": query,
+        },
+        flush=True,
+    )
+    
+    # No liberamos el lock inmediatamente para impedir otra ráfaga.
+    # Expirará por TTL si el job duplicado ya estaba activo.
     return {
         "ok": True,
-        "handled": "idcif_enqueued_generation",
+        "handled": "idcif_generation_duplicate_or_not_enqueued",
         "query": query,
     }
 
@@ -2290,12 +2519,48 @@ def health():
 @app.post("/evolution/webhook")
 def evolution_webhook():
     try:
+        webhook_started_at = time.monotonic()
+        webhook_received_epoch = time.time()
         secret = request.headers.get("x-bridge-secret", "").strip()
         if EVOLUTION_WEBHOOK_SECRET and secret != EVOLUTION_WEBHOOK_SECRET:
             return jsonify({"ok": False, "error": "unauthorized"}), 401
 
         payload = request.get_json(silent=True) or {}
         print("EVOLUTION WEBHOOK:", payload, flush=True)
+
+        data_for_timestamp = payload.get("data") or {}
+
+        raw_message_timestamp = (
+            data_for_timestamp.get("messageTimestamp")
+            or payload.get("messageTimestamp")
+            or 0
+        )
+        
+        try:
+            message_timestamp = float(raw_message_timestamp)
+        
+            # Algunos payloads pueden venir en milisegundos.
+            if message_timestamp > 10_000_000_000:
+                message_timestamp /= 1000.0
+        
+            webhook_delivery_delay = round(
+                webhook_received_epoch - message_timestamp,
+                3,
+            )
+        
+        except Exception:
+            message_timestamp = 0
+            webhook_delivery_delay = None
+        
+        print(
+            "[WEBHOOK RECEIVED]",
+            {
+                "server_epoch": webhook_received_epoch,
+                "message_timestamp": message_timestamp,
+                "delivery_delay_seconds": webhook_delivery_delay,
+            },
+            flush=True,
+        )
 
         instance_name = _payload_instance(payload)
         print("[EVOLUTION INSTANCE]", repr(instance_name), flush=True)
@@ -2480,24 +2745,114 @@ def evolution_webhook():
         else:
             normalized_query = f"MEDIA:{msg_type}:{media_id}"
         
-        command_key = hashlib.sha1(
-            f"{remote_jid}|{requester_number}|{normalized_query}".encode("utf-8")
+        command_raw = (
+            f"{instance_name}|"
+            f"{remote_jid}|"
+            f"{requester_number}|"
+            f"{normalized_query}"
+        )
+        
+        command_key = hashlib.sha256(
+            command_raw.encode("utf-8")
         ).hexdigest()
-
-        inflight_key = f"inflight:{instance_name}:{command_key}"
-        if not _redis_setnx_ttl(inflight_key, 30):
-            return jsonify({"ok": True, "ignored": "already_processing"}), 200
+        
+        inflight_key = f"inflight:{command_key}"
+        
+        if not _redis_setnx_ttl(
+            inflight_key,
+            REQUEST_INFLIGHT_TTL_SEC,
+        ):
+            print(
+                "[DUPLICATE REQUEST BLOCKED]",
+                {
+                    "instance": instance_name,
+                    "group": remote_jid,
+                    "requester": requester_number,
+                    "query": normalized_query,
+                    "inflight_key": inflight_key,
+                },
+                flush=True,
+            )
+        
+            duplicate_notice_key = (
+                f"duplicate_notice:"
+                f"{instance_name}:"
+                f"{command_key}"
+            )
+        
+            # Avisar como máximo una vez cada 60 segundos.
+            if _redis_setnx_ttl(
+                duplicate_notice_key,
+                60,
+            ):
+                try:
+                    evolution_send_text(
+                        group_jid=remote_jid,
+                        text=(
+                            f"⏳ {requester_label}, esta solicitud "
+                            "ya está siendo procesada.\n"
+                            "No es necesario volver a enviarla."
+                        ),
+                        instance_name=instance_name,
+                        timeout=(2.5, 8),
+                    )
+        
+                except Exception as duplicate_notice_error:
+                    print(
+                        "[DUPLICATE NOTICE ERROR]",
+                        repr(duplicate_notice_error),
+                        flush=True,
+                    )
+        
+            return jsonify({
+                "ok": True,
+                "ignored": "already_processing",
+                "message": (
+                    "La misma solicitud ya está siendo procesada."
+                ),
+            }), 200
 
         ack_key = f"ack:{instance_name}:{msg_id}"
+
         if _redis_setnx_ttl(ack_key, 300):
+            ack_started_at = time.monotonic()
+        
             try:
-                evolution_send_text(
+                evolution_send_ack_fast(
                     group_jid=remote_jid,
-                    text=f"👽 DOCIFY MX\nSolicitud recibida de {requester_label}.\nEsto puede tardar unos minutos...",
-                    instance_name=instance_name
+                    requester_label=requester_label,
+                    instance_name=instance_name,
                 )
-            except Exception as e:
-                print("group ack error:", repr(e), flush=True)
+        
+                print(
+                    "[WEBHOOK ACK SENT]",
+                    {
+                        "instance": instance_name,
+                        "group": remote_jid,
+                        "msg_id": msg_id,
+                        "seconds": round(
+                            time.monotonic() - ack_started_at,
+                            3,
+                        ),
+                    },
+                    flush=True,
+                )
+        
+            except Exception as ack_error:
+                print(
+                    "[WEBHOOK ACK ERROR]",
+                    {
+                        "instance": instance_name,
+                        "group": remote_jid,
+                        "msg_id": msg_id,
+                        "error": repr(ack_error),
+                        "seconds": round(
+                            time.monotonic() - ack_started_at,
+                            3,
+                        ),
+                    },
+                    flush=True,
+                )
 
         job_data = {
             "requester_number": requester_number,
@@ -2515,15 +2870,74 @@ def evolution_webhook():
             "bot_internal_url": BOT_INTERNAL_URL,
             "bot_internal_token": BOT_INTERNAL_TOKEN,
             "evolution_instance": instance_name,
+            "request_key": command_key,
+            "inflight_key": inflight_key,
         }
 
-        task_queue.enqueue(
-            "worker_jobs.process_group_request_job",
-            job_data,
-            job_timeout=900,
-            result_ttl=3600,
-            failure_ttl=86400,
-        )
+        rq_job_id = f"group-request:{command_key}"
+
+        try:
+            print(
+                "[WEBHOOK BEFORE ENQUEUE]",
+                {
+                    "instance": instance_name,
+                    "group": remote_jid,
+                    "msg_id": msg_id,
+                    "elapsed_seconds": round(
+                        time.monotonic() - webhook_started_at,
+                        3,
+                    ),
+                },
+                flush=True,
+            )
+            
+            task_queue.enqueue(
+                "worker_jobs.process_group_request_job",
+                job_data,
+                job_id=rq_job_id,
+                job_timeout=900,
+                result_ttl=0,
+                failure_ttl=1200,
+            )
+
+            print(
+                "[WEBHOOK ENQUEUED]",
+                {
+                    "instance": instance_name,
+                    "group": remote_jid,
+                    "msg_id": msg_id,
+                    "rq_job_id": rq_job_id,
+                    "elapsed_seconds": round(
+                        time.monotonic() - webhook_started_at,
+                        3,
+                    ),
+                },
+                flush=True,
+            )
+                        
+        except Exception as enqueue_err:
+            err_text = str(enqueue_err).lower()
+        
+            if (
+                "already exists" in err_text
+                or "already exists in" in err_text
+                or "duplicate" in err_text
+            ):
+                print(
+                    "[RQ DUPLICATE JOB BLOCKED]",
+                    rq_job_id,
+                    repr(enqueue_err),
+                    flush=True,
+                )
+        
+                return jsonify({
+                    "ok": True,
+                    "ignored": "duplicate_job",
+                }), 200
+        
+            # Si encolar realmente falló, libera el bloqueo.
+            redis_conn.delete(inflight_key)
+            raise
 
         return jsonify({
             "ok": True,
