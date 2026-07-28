@@ -793,6 +793,45 @@ def _parse_command(text: str):
     lines = [line for line in lines if line]
 
     # -------------------------------------------------
+    # DETECTAR LOTE RFC + IDCIF ANTES DEL PAR INDIVIDUAL
+    # -------------------------------------------------
+    batch_pairs = []
+    
+    i = 0
+    while i < len(lines):
+        current = lines[i]
+    
+        if (
+            re.fullmatch(rfc_pattern, current)
+            and i + 1 < len(lines)
+            and re.fullmatch(idcif_pattern, lines[i + 1])
+        ):
+            batch_pairs.append(
+                (
+                    current.strip().upper(),
+                    lines[i + 1].strip()
+                )
+            )
+            i += 2
+            continue
+    
+        i += 1
+    
+    if len(batch_pairs) >= 2:
+        batch_query_lines = []
+    
+        for batch_rfc, batch_idcif in batch_pairs:
+            batch_query_lines.append(batch_rfc)
+            batch_query_lines.append(batch_idcif)
+    
+        return {
+            "ok": True,
+            "type": "rfc_idcif_batch",
+            "query": "\n".join(batch_query_lines),
+            "error": None,
+        }
+
+    # -------------------------------------------------
     # 1) VÁLIDOS EXACTOS
     # -------------------------------------------------
     if re.fullmatch(curp_pattern, flat):
