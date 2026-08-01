@@ -120,6 +120,12 @@ task_queue = Queue("constancia_jobs", connection=redis_conn)
 REQUEST_INFLIGHT_TTL_SEC = int(
     os.getenv("REQUEST_INFLIGHT_TTL_SEC", "1200") or "1200"
 )
+REQUEST_PROCESSED_TTL_SEC = int(
+    os.getenv(
+        "REQUEST_PROCESSED_TTL_SEC",
+        "1800",
+    ) or "1800"
+)
 
 IDCIF_REQUEST_LOCK_TTL_SEC = int(
     os.getenv("IDCIF_REQUEST_LOCK_TTL_SEC", "1800") or "1800"
@@ -2909,6 +2915,59 @@ def evolution_webhook():
         ).hexdigest()
         
         inflight_key = f"inflight:{command_key}"
+
+        processed_key = f"processed:{command_key}"
+
+        if redis_conn.exists(processed_key):
+            print(
+                "[PROCESSED REQUEST BLOCKED]",
+                {
+                    "instance": instance_name,
+                    "group": remote_jid,
+                    "requester": requester_number,
+                    "query": normalized_query,
+                    "processed_key": processed_key,
+                },
+                flush=True,
+            )
+        
+            processed_notice_key = (
+                f"processed_notice:"
+                f"{instance_name}:"
+                f"{command_key}"
+            )
+        
+            # Evita mandar varios avisos si lo repite muchas veces seguidas.
+            if _redis_setnx_ttl(
+                processed_notice_key,
+                60,
+            ):
+                try:
+                    evolution_send_text(
+                        group_jid=remote_jid,
+                        text=(
+                            f"⏳ {requester_label}, esta solicitud "
+                            "ya ha sido procesada.\n"
+                            "No es necesario volver a enviarla."
+                        ),
+                        instance_name=instance_name,
+                        timeout=(2.5, 8),
+                    )
+        
+                except Exception as processed_notice_error:
+                    print(
+                        "[PROCESSED NOTICE ERROR]",
+                        repr(processed_notice_error),
+                        flush=True,
+                    )
+        
+            return jsonify({
+                "ok": True,
+                "ignored": "already_processed",
+                "message": (
+                    "La misma solicitud ya fue procesada."
+                ),
+            }), 200
         
         if not _redis_setnx_ttl(
             inflight_key,
@@ -3024,6 +3083,8 @@ def evolution_webhook():
             "evolution_instance": instance_name,
             "request_key": command_key,
             "inflight_key": inflight_key,
+            "processed_key": processed_key,
+            "processed_ttl_sec": REQUEST_PROCESSED_TTL_SEC,
         }
 
         rq_job_id = f"group-request:{command_key}"
