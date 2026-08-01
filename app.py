@@ -123,8 +123,8 @@ REQUEST_INFLIGHT_TTL_SEC = int(
 REQUEST_PROCESSED_TTL_SEC = int(
     os.getenv(
         "REQUEST_PROCESSED_TTL_SEC",
-        "1800",
-    ) or "1800"
+        "86400",
+    ) or "86400"
 )
 
 IDCIF_REQUEST_LOCK_TTL_SEC = int(
