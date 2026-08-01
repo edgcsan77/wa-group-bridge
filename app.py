@@ -604,11 +604,58 @@ def _is_text_candidate(text: str) -> bool:
     if len(compact_tokens) >= 2:
         first = compact_tokens[0]
         second = compact_tokens[1]
-
-        if (_looks_like_rfc(first) or re.fullmatch(rfc_pattern, first)) and _looks_like_idcif(second):
+    
+        first_is_rfc = bool(
+            _looks_like_rfc(first)
+            or re.fullmatch(
+                rfc_pattern,
+                first
+            )
+        )
+    
+        second_is_rfc = bool(
+            _looks_like_rfc(second)
+            or re.fullmatch(
+                rfc_pattern,
+                second
+            )
+        )
+    
+        first_is_idcif = bool(
+            _looks_like_idcif(first)
+            or re.fullmatch(
+                idcif_pattern,
+                first
+            )
+        )
+    
+        second_is_idcif = bool(
+            _looks_like_idcif(second)
+            or re.fullmatch(
+                idcif_pattern,
+                second
+            )
+        )
+    
+        if (
+            first_is_rfc
+            and second_is_idcif
+        ):
             return True
-
-        if (_looks_like_curp(first) or re.fullmatch(curp_pattern, first)):
+    
+        if (
+            first_is_idcif
+            and second_is_rfc
+        ):
+            return True
+    
+        if (
+            _looks_like_curp(first)
+            or re.fullmatch(
+                curp_pattern,
+                first
+            )
+        ):
             return True
 
     # Por línea / pseudo-líneas
@@ -792,30 +839,96 @@ def _parse_command(text: str):
     lines = [_strip_known_prefix(line) for line in raw_lines]
     lines = [line for line in lines if line]
 
-    # -------------------------------------------------
+   # -------------------------------------------------
     # DETECTAR LOTE RFC + IDCIF ANTES DEL PAR INDIVIDUAL
+    #
+    # Admite:
+    #   RFC IDCIF
+    #   IDCIF RFC
+    #   RFC\nIDCIF
+    #   IDCIF\nRFC
+    #   y combinaciones mezcladas.
     # -------------------------------------------------
-    batch_pairs = []
+    batch_token_pattern = re.compile(
+        rf"(?P<RFC>\b{rfc_pattern}\b)"
+        rf"|(?P<IDCIF>\b{idcif_pattern}\b)",
+        flags=re.IGNORECASE,
+    )
     
-    i = 0
-    while i < len(lines):
-        current = lines[i]
+    batch_tokens = []
     
-        if (
-            re.fullmatch(rfc_pattern, current)
-            and i + 1 < len(lines)
-            and re.fullmatch(idcif_pattern, lines[i + 1])
-        ):
-            batch_pairs.append(
+    for match in batch_token_pattern.finditer(
+        upper_raw_clean
+    ):
+        if match.group("RFC"):
+            batch_tokens.append(
                 (
-                    current.strip().upper(),
-                    lines[i + 1].strip()
+                    "RFC",
+                    match.group("RFC").strip().upper(),
                 )
             )
+            continue
+    
+        if match.group("IDCIF"):
+            batch_tokens.append(
+                (
+                    "IDCIF",
+                    match.group("IDCIF").strip(),
+                )
+            )
+    
+    batch_pairs = []
+    batch_seen = set()
+    
+    i = 0
+    
+    while i < len(batch_tokens) - 1:
+        type_1, value_1 = batch_tokens[i]
+        type_2, value_2 = batch_tokens[i + 1]
+    
+        pair = None
+    
+        if (
+            type_1 == "RFC"
+            and type_2 == "IDCIF"
+        ):
+            pair = (
+                value_1,
+                value_2,
+            )
+    
+        elif (
+            type_1 == "IDCIF"
+            and type_2 == "RFC"
+        ):
+            pair = (
+                value_2,
+                value_1,
+            )
+    
+        if pair:
+            if pair not in batch_seen:
+                batch_seen.add(pair)
+                batch_pairs.append(pair)
+    
             i += 2
             continue
     
+        # Dos RFC seguidos o dos IDCIF seguidos.
+        # Avanza uno para intentar recuperar el siguiente par.
         i += 1
+    
+    print(
+        "[RFC_IDCIF_BATCH_PARSE]",
+        {
+            "raw": repr(raw),
+            "upper_raw_clean": repr(upper_raw_clean),
+            "tokens": batch_tokens,
+            "pairs": batch_pairs,
+            "pair_count": len(batch_pairs),
+        },
+        flush=True,
+    )
     
     if len(batch_pairs) >= 2:
         batch_query_lines = []
