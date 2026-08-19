@@ -506,6 +506,14 @@ def _clean_spaces(text: str) -> str:
 def _normalize_upper(text: str) -> str:
     return _clean_spaces((text or "").upper())
 
+def _dato_solicitado_text(value: str) -> str:
+    value = _safe(value).strip().upper()
+
+    if not value:
+        return "NO DISPONIBLE"
+
+    return value
+
 def _format_input_error():
     return ""
 
@@ -885,44 +893,95 @@ def _parse_command(text: str):
     
     batch_pairs = []
     batch_seen = set()
-    
-    i = 0
-    
-    while i < len(batch_tokens) - 1:
-        type_1, value_1 = batch_tokens[i]
-        type_2, value_2 = batch_tokens[i + 1]
-    
-        pair = None
-    
-        if (
-            type_1 == "RFC"
-            and type_2 == "IDCIF"
-        ):
-            pair = (
-                value_1,
-                value_2,
-            )
-    
-        elif (
-            type_1 == "IDCIF"
-            and type_2 == "RFC"
-        ):
-            pair = (
-                value_2,
-                value_1,
-            )
-    
-        if pair:
-            if pair not in batch_seen:
-                batch_seen.add(pair)
-                batch_pairs.append(pair)
-    
-            i += 2
-            continue
-    
-        # Dos RFC seguidos o dos IDCIF seguidos.
-        # Avanza uno para intentar recuperar el siguiente par.
-        i += 1
+
+    # =========================================================
+    # RFC + IDCIF BATCH SEGURO
+    #
+    # Se aceptan AMBOS órdenes por pareja:
+    #
+    #   RFC IDCIF
+    #   IDCIF RFC
+    #
+    # También pueden venir mezclados:
+    #
+    #   RFC IDCIF
+    #   IDCIF RFC
+    #   RFC IDCIF
+    #
+    # SEGURIDAD:
+    # Cada pareja se toma SIEMPRE de 2 en 2.
+    # Nunca se desliza un token buscando pareja más adelante.
+    #
+    # Si hay 3 o más tokens y la cantidad es impar,
+    # se rechaza TODO el lote para impedir corrimientos.
+    # =========================================================
+    batch_structure_valid = True
+    batch_structure_error = ""
+
+    # 1 token = RFC o IDCIF individual.
+    # 2 tokens = pareja individual.
+    # 3+ tokens = intento de lote múltiple.
+    batch_is_multi_candidate = len(batch_tokens) >= 3
+
+    if batch_is_multi_candidate:
+        if len(batch_tokens) % 2 != 0:
+            batch_structure_valid = False
+            batch_structure_error = "ODD_TOKEN_COUNT"
+
+        else:
+            for idx in range(0, len(batch_tokens), 2):
+                type_1, value_1 = batch_tokens[idx]
+                type_2, value_2 = batch_tokens[idx + 1]
+
+                # RFC + IDCIF
+                if type_1 == "RFC" and type_2 == "IDCIF":
+                    pair = (
+                        value_1,
+                        value_2,
+                    )
+
+                # IDCIF + RFC
+                elif type_1 == "IDCIF" and type_2 == "RFC":
+                    pair = (
+                        value_2,
+                        value_1,
+                    )
+
+                # RFC + RFC o IDCIF + IDCIF:
+                # pareja inválida; NO intentar correr tokens.
+                else:
+                    batch_structure_valid = False
+                    batch_structure_error = (
+                        f"INVALID_PAIR_AT_{idx}_{idx + 1}:"
+                        f"{type_1}_{type_2}"
+                    )
+                    break
+
+                if pair not in batch_seen:
+                    batch_seen.add(pair)
+                    batch_pairs.append(pair)
+
+    if batch_is_multi_candidate and not batch_structure_valid:
+        print(
+            "[RFC_IDCIF_BATCH_REJECTED]",
+            {
+                "reason": batch_structure_error,
+                "tokens": batch_tokens,
+                "raw": repr(raw),
+            },
+            flush=True,
+        )
+
+        return {
+            "ok": False,
+            "type": "invalid_rfc_idcif_batch",
+            "query": None,
+            "error": (
+                "⚠️ La lista RFC + IDCIF tiene un formato incompleto "
+                "o desalineado.\n\n"
+                f"*Dato solicitado:*\n{raw}"
+            ),
+        }
     
     print(
         "[RFC_IDCIF_BATCH_PARSE]",
@@ -1083,8 +1142,9 @@ def _parse_command(text: str):
                         "type": "invalid_idcif",
                         "query": None,
                         "error": (
-                            "⚠️ IDCIF inválido.\n"
-                            "Debe contener únicamente 11 dígitos.\n"
+                            "⚠️ IDCIF inválido.\n\n"
+                            f"*Dato solicitado:* {_dato_solicitado_text(second_line)}\n\n"
+                            "Debe contener únicamente 11 dígitos."
                         )
                     }
 
@@ -1100,8 +1160,9 @@ def _parse_command(text: str):
                 "type": "invalid_curp",
                 "query": None,
                 "error": (
-                    "⚠️ CURP inválida.\n"
-                    "Debe tener 18 caracteres con formato correcto.\n"
+                    "⚠️ CURP inválida.\n\n"
+                    f"*Dato solicitado:* {_dato_solicitado_text(curp_candidate)}\n\n"
+                    "Debe tener 18 caracteres con formato correcto."
                 )
             }
 
@@ -1114,9 +1175,10 @@ def _parse_command(text: str):
                 "type": "invalid_rfc",
                 "query": None,
                 "error": (
-                    "⚠️ RFC inválido.\n"
+                    "⚠️ RFC inválido.\n\n"
+                    f"*Dato solicitado:* {_dato_solicitado_text(rfc_candidate)}\n\n"
                     "Persona física: 13 caracteres.\n"
-                    "Persona moral: 12 caracteres.\n"
+                    "Persona moral: 12 caracteres."
                 )
             }
 
@@ -1129,8 +1191,9 @@ def _parse_command(text: str):
                 "type": "invalid_idcif",
                 "query": None,
                 "error": (
-                    "⚠️ IDCIF inválido.\n"
-                    "Debe contener únicamente 11 dígitos.\n"
+                    "⚠️ IDCIF inválido.\n\n"
+                    f"*Dato solicitado:* {_dato_solicitado_text(idcif_candidate)}\n\n"
+                    "Debe contener únicamente 11 dígitos."
                 )
             }
     
@@ -1165,8 +1228,9 @@ def _parse_command(text: str):
             "type": "invalid_curp",
             "query": None,
             "error": (
-                "⚠️ CURP inválida.\n"
-                "Debe tener 18 caracteres con formato correcto.\n"
+                "⚠️ CURP inválida.\n\n"
+                f"*Dato solicitado:* {_dato_solicitado_text(maybe_curp)}\n\n"
+                "Debe tener 18 caracteres con formato correcto."
             )
         }
 
@@ -1177,9 +1241,10 @@ def _parse_command(text: str):
             "type": "invalid_rfc",
             "query": None,
             "error": (
-                "⚠️ RFC inválido.\n"
+                "⚠️ RFC inválido.\n\n"
+                f"*Dato solicitado:* {_dato_solicitado_text(maybe_rfc)}\n\n"
                 "Persona física: 13 caracteres.\n"
-                "Persona moral: 12 caracteres.\n"
+                "Persona moral: 12 caracteres."
             )
         }
 
@@ -1190,8 +1255,9 @@ def _parse_command(text: str):
             "type": "invalid_idcif",
             "query": None,
             "error": (
-                "⚠️ IDCIF inválido.\n"
-                "Debe contener únicamente 11 dígitos.\n"
+                "⚠️ IDCIF inválido.\n\n"
+                f"*Dato solicitado:* {_dato_solicitado_text(maybe_idcif)}\n\n"
+                "Debe contener únicamente 11 dígitos."
             )
         }
 
@@ -1208,9 +1274,10 @@ def _parse_command(text: str):
                 "type": "invalid_rfc",
                 "query": None,
                 "error": (
-                    "⚠️ RFC inválido.\n"
+                    "⚠️ RFC inválido.\n\n"
+                    f"*Dato solicitado:* {_dato_solicitado_text(line)}\n\n"
                     "Persona física: 13 caracteres.\n"
-                    "Persona moral: 12 caracteres.\n"
+                    "Persona moral: 12 caracteres."
                 )
             }
 
@@ -1220,8 +1287,9 @@ def _parse_command(text: str):
                 "type": "invalid_curp",
                 "query": None,
                 "error": (
-                    "⚠️ CURP inválida.\n"
-                    "Debe tener 18 caracteres con formato correcto.\n"
+                    "⚠️ CURP inválida.\n\n"
+                    f"*Dato solicitado:* {_dato_solicitado_text(line)}\n\n"
+                    "Debe tener 18 caracteres con formato correcto."
                 )
             }
 
@@ -1231,8 +1299,9 @@ def _parse_command(text: str):
                 "type": "invalid_idcif",
                 "query": None,
                 "error": (
-                    "⚠️ IDCIF inválido.\n"
-                    "Debe contener únicamente 11 dígitos.\n"
+                    "⚠️ IDCIF inválido.\n\n"
+                    f"*Dato solicitado:* {_dato_solicitado_text(line)}\n\n"
+                    "Debe contener únicamente 11 dígitos."
                 )
             }
 
@@ -2397,7 +2466,7 @@ def _handle_idcif_client_message(
             remote_jid,
             (
                 "⏳ Esta solicitud IDCIF ya está en proceso.\n\n"
-                f"Dato: {term}\n"
+                f"*Dato solicitado:* {term}\n"
                 "No es necesario volver a enviarla."
             ),
         )
@@ -2947,7 +3016,8 @@ def evolution_webhook():
                         group_jid=remote_jid,
                         text=(
                             f"⏳ {requester_label}, esta solicitud "
-                            "ya ha sido procesada.\n"
+                            "ya fue procesada.\n\n"
+                            f"*Dato solicitado:* {_dato_solicitado_text(query or text)}\n\n"
                             "No es necesario volver a enviarla."
                         ),
                         instance_name=instance_name,
@@ -3001,7 +3071,8 @@ def evolution_webhook():
                         group_jid=remote_jid,
                         text=(
                             f"⏳ {requester_label}, esta solicitud "
-                            "ya está siendo procesada.\n"
+                            "ya está siendo procesada.\n\n"
+                            f"*Dato solicitado:* {_dato_solicitado_text(query or text)}\n\n"
                             "No es necesario volver a enviarla."
                         ),
                         instance_name=instance_name,
