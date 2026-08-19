@@ -2121,7 +2121,7 @@ def evolution_send_ack_fast(
         text=(
             "👽 DOCIFY MX\n"
             f"Solicitud recibida de {requester_label}.\n\n"
-            f"*Dato solicitado:* {dato_solicitado}"
+            f"*Dato solicitado:*\n{dato_solicitado}"
         ),
         instance_name=instance_name,
         timeout=(2.5, 8),
