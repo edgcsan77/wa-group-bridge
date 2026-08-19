@@ -2444,10 +2444,8 @@ def _handle_idcif_client_message(
             remote_jid,
             (
                 "⚠️ Formato no válido para IDCIF.\n\n"
-                "Envía solamente RFC o CURP.\n\n"
-                "Ejemplos:\n"
-                "ABC010203XYZ\n"
-                "GACG640211HOCLSD00"
+                f"*Dato solicitado:* {_dato_solicitado_text(text)}\n\n"
+                "Envía solamente RFC o CURP."
             ),
         )
         return {"ok": True, "handled": "idcif_client_invalid"}
@@ -2466,7 +2464,7 @@ def _handle_idcif_client_message(
             remote_jid,
             (
                 "⏳ Esta solicitud IDCIF ya está en proceso.\n\n"
-                f"*Dato solicitado:* {term}\n"
+                f"*Dato solicitado:* {term}\n\n"
                 "No es necesario volver a enviarla."
             ),
         )
@@ -2482,7 +2480,10 @@ def _handle_idcif_client_message(
     
         _idcif_send_to_client(
             remote_jid,
-            "⚠️ No está configurado el grupo de la proveedora IDCIF.",
+            (
+                "⚠️ No está configurado el grupo de la proveedora IDCIF.\n\n"
+                f"*Dato solicitado:* {term}"
+            ),
         )
     
         return {
@@ -2544,7 +2545,9 @@ def _handle_idcif_client_message(
             remote_jid,
             (
                 "⚠️ No fue posible enviar la solicitud IDCIF "
-                "a la proveedora. Puedes intentarlo nuevamente."
+                "a la proveedora.\n\n"
+                f"*Dato solicitado:* {term}\n\n"
+                "Puedes intentarlo nuevamente."
             ),
         )
     
