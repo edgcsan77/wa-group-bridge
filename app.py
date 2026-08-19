@@ -2113,13 +2113,15 @@ def evolution_send_text(
 def evolution_send_ack_fast(
     group_jid: str,
     requester_label: str,
+    dato_solicitado: str,
     instance_name: str,
 ):
     return evolution_send_text(
         group_jid=group_jid,
         text=(
             "👽 DOCIFY MX\n"
-            f"Solicitud recibida de {requester_label}.\n"
+            f"Solicitud recibida de {requester_label}.\n\n"
+            f"*Dato solicitado:* {dato_solicitado}\n\n"
             "Esto puede tardar unos minutos..."
         ),
         instance_name=instance_name,
@@ -3106,6 +3108,7 @@ def evolution_webhook():
                 evolution_send_ack_fast(
                     group_jid=remote_jid,
                     requester_label=requester_label,
+                    dato_solicitado=_dato_solicitado_text(query or text),
                     instance_name=instance_name,
                 )
         
