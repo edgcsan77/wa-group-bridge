@@ -510,7 +510,7 @@ def _dato_solicitado_text(value: str) -> str:
     value = _safe(value).strip().upper()
 
     if not value:
-        return "NO DISPONIBLE"
+        return "N/A"
 
     return value
 
